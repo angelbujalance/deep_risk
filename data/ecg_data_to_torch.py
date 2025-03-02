@@ -51,14 +51,16 @@ for filename in os.listdir(ecg_folder_path):
             assert file_tensor.shape == torch.Size([12, 5000])
             tensors.append(file_tensor)
 
-            # Print the root element or any specific content
-            #print(f"Content of {filename}:")
-            #ET.dump(root)  # This prints the entire XML structure
-            #print("\n" + "="*40 + "\n")
         except ET.ParseError as e:
             print(f"Error parsing {filename}: {e}")
 
 
 combined_tensor = torch.stack(tensors)
+
+os.chdir(initial_file_dir)
+
+print(type(combined_tensor))
+print(combined_tensor.shape)
+print(combined_tensor.dtype)
 
 torch.save(combined_tensor, "full_data.pt")
