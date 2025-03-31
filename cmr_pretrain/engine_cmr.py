@@ -2,6 +2,11 @@ import torch
 import time
 import math
 from sklearn.metrics import mean_squared_error, r2_score
+import os
+from collections.abc import Iterable
+from torch.amp import GradScaler
+import datetime
+import numpy as np
 
 # Automatic Mixed Precision
 # https://pytorch.org/tutorials/recipes/recipes/amp_recipe.html
@@ -25,9 +30,29 @@ def adjust_learning_rate(optimizer, epoch, args):
     return lr
 
 
+def is_dist_avail_and_initialized():
+    if not torch.distributed.is_available():
+        return False
+    if not torch.distributed.is_initialized():
+        return False
+    return True
+
+
+def get_world_size():
+    if not is_dist_avail_and_initialized():
+        return 1
+    return torch.distributed.get_world_size()
+
+
+def get_rank():
+    if not is_dist_avail_and_initialized():
+        return 0
+    return torch.distributed.get_rank()
+
+
 def train_one_epoch(model: torch.nn.Module, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, data_loader: Iterable,
-                    epoch_index, tb_writer, scaler: GradScaler, args=None):
+                    device: torch.device, device_type: str, epoch: int, data_loader: Iterable,
+                    scaler: GradScaler, loss_fn: torch.nn.Module, args=None):
 
     model.train(True)
 
@@ -42,8 +67,6 @@ def train_one_epoch(model: torch.nn.Module, optimizer: torch.optim.Optimizer,
 
     current_loss = 0
 
-    loss_fn = torch.nn.CrossEntropyLoss()
-
     for iter_step, data in enumerate(data_loader):
 
         if iter_step % accum_iter == 0:
@@ -51,18 +74,20 @@ def train_one_epoch(model: torch.nn.Module, optimizer: torch.optim.Optimizer,
 
         inputs, labels = data
 
-        inputs = inputs.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
+        # print(f"Inputs shape is {inputs.shape}")
 
-        optimizer.zero_grad()
+        inputs = inputs.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True) # , dtype=torch.float32)
+
+        # optimizer.zero_grad() # why zero_grad was here?
 
         # amp is used for mixed precision training
-        with torch.autocast(device_type=device, dtype=torch.float16, enabled=args.use_amp): 
+        with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=args.use_amp): 
             outputs = model(inputs)
-            assert output.dtype is torch.float16
+            assert outputs.dtype is torch.float16
 
             loss = loss_fn(outputs, labels)
-            assert loss.dtype is torch.float32
+            assert loss.dtype is torch.float32, f"The dtype of loss is {loss.dtype}"
 
         # loss divided by the effective batch size
         loss /= accum_iter
@@ -93,16 +118,16 @@ def train_one_epoch(model: torch.nn.Module, optimizer: torch.optim.Optimizer,
     print('{} Total time epoch: {}'.format(header, total_time))
     print('Final Epoch Stats: loss={}, lr={}'.format(last_loss, adjusted_lr))  
 
-    return last_loss
+    return last_loss.item()
 
 
 @torch.no_grad()
-def evaluate(model: torch.nn.Module, data_loader: Iterable):
-    loss_fn = torch.nn.CrossEntropyLoss()
+def evaluate(model: torch.nn.Module, data_loader: Iterable, device:torch.device,
+             device_type: str, loss_fn: torch.nn.Module, args=None):
 
     header = 'Test:'
 
-    model.eval()
+    model.train()
 
     total_loss = 0
     all_preds = []
@@ -114,26 +139,33 @@ def evaluate(model: torch.nn.Module, data_loader: Iterable):
 
         inputs, labels = data
 
-        inputs = inputs.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
+        inputs = inputs.to(device, non_blocking=True) #, dtype=torch.float32)
+        labels = labels.to(device, non_blocking=True) #, dtype=torch.float32)
 
-        with torch.autocast(device_type=device, dtype=torch.float16, enabled=args.use_amp): 
+        with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=args.use_amp): 
             outputs = model(inputs)
-            assert output.dtype is torch.float16
+            print("outputs", outputs[:10])
+            assert outputs.dtype is torch.float16
 
             loss = loss_fn(outputs, labels)
+            print("loss", loss)
             total_loss += loss.item()
-            assert loss.dtype is torch.float32
+            print("total_loss", total_loss)
+            assert loss.dtype is torch.float32, f"The dtype of loss is {loss.dtype}"
 
         all_preds.append(outputs.cpu().numpy())
         all_labels.append(labels.cpu().numpy())
 
-    avg_loss = total_loss / data_loader.size(0)
+    avg_loss = total_loss /  len(data_loader)
+    print("avg_loss", avg_loss)
     
     all_preds = np.concatenate(all_preds, axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
 
     mse = mean_squared_error(all_labels, all_preds)
+    print("mse", mse)
+    print("all_preds", all_preds[:100])
+    print("all_labels", all_labels[:20])
     r2 = r2_score(all_labels, all_preds)
 
     total_time = str(datetime.timedelta(seconds=int(time.time() - start_time)))
@@ -147,3 +179,39 @@ def evaluate(model: torch.nn.Module, data_loader: Iterable):
     }
 
     return metrics
+
+
+def load_checkpoint(model, checkpoint_path, device, optimizer=None):
+    if os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+
+        if optimizer and "optimizer_state_dict" in checkpoint and checkpoint["optimizer_state_dict"]:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+        print(f"Model checkpoint loaded succesfully")
+
+        return checkpoint
+
+    else:
+        print(f"Not checkpoint provided. Starting model training with default model.")
+
+
+def save_checkpoint(model, checkpoint_path: str, optimizer=None, epoch=None, loss=None):
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict() if optimizer else None,
+        'epoch': epoch,
+        'loss': loss,
+        'model_class': model.__class__.__name__,  # Store model class name
+    }
+
+    if not os.path.exists(checkpoint_path):
+        os.makedirs(checkpoint_path)
+
+    checkpoint_name = os.path.join(checkpoint_path,
+        f"{model.__class__.__name__}_checkpoint-{epoch}-loss-{loss}.pth"
+    )
+    torch.save(checkpoint, checkpoint_name)
+
+    print(f"{model.__class__.__name__} model's checkpoint saved at {checkpoint_path}")
