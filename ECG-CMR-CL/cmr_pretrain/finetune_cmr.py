@@ -1,6 +1,7 @@
 import torch
 import torchvision.transforms as transforms
 import numpy as np
+import pandas as pd
 import argparse
 from engine_cmr import train_one_epoch, evaluate, get_rank, get_world_size, load_checkpoint, save_checkpoint
 from cmr_dataset import CMRDataset
@@ -14,7 +15,7 @@ def get_args_parser():
     parser.add_argument('--batch_size', default=64, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus')
     parser.add_argument('--epochs', default=100, type=int)
-    parser.add_argument('--model_name', default="ResNet50", choices=["SwinTransformer", "ResNet50"])
+    parser.add_argument('--model_name', default="ResNet50", choices=["SwinTransformer", "ResNet50", "RestNet50-3D"])
     parser.add_argument('--accum_iter', default=1, type=int,
                         help='Accumulate gradient iterations (for increasing the effective batch size under memory constraints)')
     parser.add_argument('--input_size', default=1) # grayscale images (MRI) (100,300)
@@ -45,7 +46,7 @@ def get_args_parser():
     parser.add_argument('--use_amp', default=True)
     parser.add_argument('--pin_memory', default=True, action='store_true',
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
-    parser.add_argument('--num_workers', default=18, type=int)
+    parser.add_argument('--num_workers', default=15, type=int)
 
     # Contrastive Learning arguments
     parser.add_argument('--return_latent_space', default=False)
@@ -148,7 +149,7 @@ def main(args):
     best_loss = float("inf")
     epochs_wo_improvement = 0
 
-    loss_fn = torch.nn.MSELoss()
+    loss_fn = torch.nn.CrossEntropyLoss()
 
     # load models from checkpoints if path is provided
     if args.checkpoint_path:
@@ -160,6 +161,7 @@ def main(args):
 
     eval_metrics_dic = {}
     train_loss_list = []
+    eval_metrics_df = pd.DataFrame()
     for epoch in range(start_epoch, args.epochs):
         # data_loader_train.sampler.set_epoch(epoch) # TODO check if makes training to start from last epoch when loading a model
 
@@ -172,8 +174,10 @@ def main(args):
         eval_metrics = evaluate(model=model, data_loader=data_loader_val, device=device,
                                 device_type=device_type, loss_fn=loss_fn, args=args)
         eval_metrics_dic[epoch] = eval_metrics
+        eval_metrics_epoch = pd.DataFrame([eval_metrics])
+        eval_metrics_df = pd.concat([eval_metrics_df, eval_metrics_epoch], ignore_index=True)
         train_loss_list.append(train_metrics)
-        
+
         # if args.eval_criterion == "loss":
         if eval_metrics['avg_loss'] < best_loss:
             best_loss = eval_metrics['avg_loss']
@@ -181,8 +185,8 @@ def main(args):
 
             # save the model with best loss if output directed is provided
             if args.output_dir:
-                save_checkpoint(model, args.output_dir, optimizer, epoch, loss=best_loss)
-                print(f"Saved best model at epoch {epoch} with loss {best_loss:.4f}")
+                save_checkpoint(model, args.output_dir, optimizer, epoch, loss=best_loss, args=args)
+                print(f"Saved best model at epoch {epoch} with loss {best_loss:.4f}\n\n")
         else:
             epochs_wo_improvement +=1
             if epochs_wo_improvement > args.patience and args.early_stopping:
@@ -191,6 +195,8 @@ def main(args):
 
     print(eval_metrics_dic)
     print(train_loss_list)
+
+    eval_metrics_df.to_csv(f"evaluation_metrics_{args.model_name}.csv")
 
 
 if __name__ == '__main__':
