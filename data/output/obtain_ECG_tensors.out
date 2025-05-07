@@ -1,0 +1,19 @@
+/gpfs/home3/abujalancegome/deep_risk/data
+/gpfs/home3
+<class 'torch.Tensor'>
+torch.Size([67897, 12, 5000])
+torch.float32
+
+JOB STATISTICS
+==============
+Job ID: 10183835
+Cluster: snellius
+User/Group: abujalancegome/abujalancegome
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 9
+CPU Utilized: 00:30:07
+CPU Efficiency: 4.81% of 10:26:24 core-walltime
+Job Wall-clock time: 01:09:36
+Memory Utilized: 14.72 GB
+Memory Efficiency: 24.53% of 60.00 GB
