@@ -1,0 +1,21 @@
+CMR train tensor shape: torch.Size([23940, 1, 50, 85, 92])
+ECG train tensor shape: torch.Size([23940, 1, 12, 5000])
+CMR val tensor shape: torch.Size([5130, 1, 50, 85, 92])
+ECG val tensor shape: torch.Size([5130, 1, 12, 5000])
+CMR test tensor shape: torch.Size([5107, 1, 50, 85, 92])
+ECG test tensor shape: torch.Size([5107, 1, 12, 5000])
+
+JOB STATISTICS
+==============
+Job ID: 11524486
+Cluster: snellius
+User/Group: abujalancegome/abujalancegome
+State: RUNNING
+Nodes: 1
+Cores per node: 16
+CPU Utilized: 00:00:00
+CPU Efficiency: 0.00% of 00:13:52 core-walltime
+Job Wall-clock time: 00:00:52
+Memory Utilized: 0.00 MB
+Memory Efficiency: 0.00% of 120.00 GB (7.50 GB/core)
+WARNING: Efficiency statistics can only be obtained after the job has ended as seff tool is based on the accounting database data.
