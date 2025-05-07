@@ -1,11 +1,12 @@
 #!/bin/bash
 
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
-#SBATCH --job-name=ECG_2_torch
+#SBATCH --job-name=data_splits
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=1:00:00
-#SBATCH --output=output/obtain_ECG_tensors.out
+#SBATCH --time=6:00:00
+#SBATCH --output=output/obtain_train_val_test_splits.out
 
 python ecg_data_to_torch.py
+python train_test_splits.py
