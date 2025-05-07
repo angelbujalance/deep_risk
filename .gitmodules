@@ -1,3 +1,6 @@
 [submodule "mae"]
 	path = mae
 	url = https://github.com/angelbujalance/mae
+[submodule "ukbb_cardiac"]
+	path = ukbb_cardiac
+	url = https://github.com/angelbujalance/ukbb_cardiac.git
