@@ -73,12 +73,53 @@ class ECGPredictor(nn.Module):
     def __init__(self, base_encoder, output_dim, embed_dim=1000):
         super().__init__()
         self.encoder = base_encoder
+        self.encoder.head = nn.Identity()
         embed_dim = base_encoder.embed_dim
-        self.head = nn.Linear(1000, output_dim)  # embed_dim must match ViT output
+
+        self.classifier = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.GELU(),
+            nn.Linear(embed_dim // 2, embed_dim // 4),
+            nn.GELU(),
+            nn.Linear(embed_dim // 4, output_dim)
+        )
 
     def forward(self, x):
-        features = self.encoder(x)
-        return self.head(features)
+        with torch.no_grad():
+            features = self.encoder(x)
+
+        features = self.classifier(features)
+        return features
+
+
+class ECGwClinicalPredictor(nn.Module):
+    def __init__(self, base_encoder, output_dim, embed_dim=1000):
+        super().__init__()
+        self.encoder = base_encoder
+        self.encoder.head = nn.Identity()
+        embed_dim = base_encoder.embed_dim
+        print(f"Embedded dimension of the base encoder = {embed_dim}")
+
+        self.projection = nn.Linear(embed_dim, 192)
+
+        self.classifier = nn.Sequential(
+            nn.Linear(193, 128),
+            nn.GELU(),
+            nn.Linear(128, 32),
+            nn.GELU(),
+            nn.Linear(32, output_dim)
+        )
+
+    def forward(self, x_ecg, x_clinical):
+        with torch.no_grad():
+            ecg_features = self.encoder(x_ecg)
+
+        ecg_features = self.projection(ecg_features)
+
+        features = torch.cat((ecg_features, x_clinical), dim=1)
+
+        features = self.classifier(features)
+        return features
 
 
 def load_model(args, model_without_ddp, optimizer, loss_scaler):

@@ -16,7 +16,7 @@ def get_args_parser():
     parser.add_argument('--batch_size', default=64, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus')
     parser.add_argument('--epochs', default=100, type=int)
-    parser.add_argument('--model_name', default="ResNet50", choices=["SwinTransformer", "ResNet50", "ResNet50-3D"])
+    parser.add_argument('--model_name', default="ResNet50", choices=["SwinTransformer", "ResNet50", "ResNet50-3D", "ResNet50-4D", "ResNet50-3D-MLP"])
     parser.add_argument('--accum_iter', default=1, type=int,
                         help='Accumulate gradient iterations (for increasing the effective batch size under memory constraints)')
 
@@ -24,6 +24,8 @@ def get_args_parser():
     parser.add_argument('--ecg_input_size', default=(12,5000)) # ECG input size (MRI) (100,300)
     parser.add_argument('--num_outputs', default=1)
     parser.add_argument('--pretrained', default=True, help='If the CMR model uses pretrained weight. By default, it uses them.')
+    parser.add_argument('--temporal_dim', type=int, default=50)
+
 
     # ECG model argument
     parser.add_argument('--ecg_model', default='vit_base_patch200', type=str, metavar='MODEL',

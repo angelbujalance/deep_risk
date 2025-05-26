@@ -28,8 +28,10 @@ def get_args_parser():
     # Data & path arguments
     parser.add_argument('--train_path', type=str, help='Path to the train dataset')
     parser.add_argument('--val_path', type=str, help='Path to the validation dataset')
+    parser.add_argument('--test_path', type=str, help='Path to the test dataset')
     parser.add_argument('--train_labels_path', type=str, help='Path to the labels of the train dataset')
     parser.add_argument('--val_labels_path', type=str, help='Path to the labels of the validation dataset')
+    parser.add_argument('test_labels_path', type=str, help='Path to the labels of the test dataset')
     parser.add_argument('--output_dir', default=None,
                         help='Path to save model checkpoints and results. If None, the checkpoints and results are not saved.')
     parser.add_argument('--checkpoint_path', default='',
@@ -87,6 +89,9 @@ def main(args):
 
     dataset_val = CMRDataset(data_path=args.val_path, labels_path=args.val_labels_path,
                  train=False, transform=transform_val)
+    
+    dataset_test = CMRDataset(data_path=args.test_path, labels_path=args.test_labels_path,
+                 train=False, transform=transform_val)
 
     num_tasks = get_world_size()
     global_rank = get_rank()
@@ -121,6 +126,16 @@ def main(args):
 
     data_loader_val = torch.utils.data.DataLoader(
         dataset_val, sampler=None,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
+        # generator=generator,
+        drop_last=False,
+    )
+
+    data_loader_test = torch.utils.data.DataLoader(
+        dataset_test, sampler=None,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
@@ -197,6 +212,11 @@ def main(args):
     print(train_loss_list)
 
     eval_metrics_df.to_csv(f"evaluation_metrics_{args.model_name}.csv")
+
+    test_metrics = evaluate(model=model, data_loader=data_loader_test, device=device,
+                                device_type=device_type, loss_fn=loss_fn, args=args)
+
+    print("test_metrics ROC curve:", test_metrics['roc'])
 
 
 if __name__ == '__main__':

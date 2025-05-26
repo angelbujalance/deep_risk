@@ -45,6 +45,9 @@ class CMRModel(torch.nn.Module, ABC):
         # Adaptive Pooling for variable input sizes
         if self.args.model_name == "ResNet50-4D":
             self.global_avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
+        # Adaptive Pooling for variable input sizes
+        elif self.args.model_name == "ResNet50-3D-MLP":
+            self.global_avg_pool = nn.AdaptiveAvgPool3d((None, 1, 1))
         else:
             self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -52,7 +55,10 @@ class CMRModel(torch.nn.Module, ABC):
         self.feature_dim = self._get_feature_dim()
 
         # Fully Connected layer (latent space) - corrected this to use latent_dim
-        self.fc = nn.Linear(self.feature_dim, self.latent_dim)
+        if hasattr(self, 'lstm'):
+            pass
+        else:    
+            self.fc = nn.Linear(self.feature_dim, self.latent_dim)
 
         # Output layer for regression
         self.output_layer = nn.Linear(self.latent_dim, self.num_outputs)
@@ -62,7 +68,7 @@ class CMRModel(torch.nn.Module, ABC):
         # print("self:", self)
         # exit()
 
-        if self.args.model_name == "ResNet50":
+        if self.args.model_name in ["ResNet50", "ResNet50-3D-MLP"]:
             x = self.model(x)
         else:
             encoded_frames = []
@@ -79,18 +85,23 @@ class CMRModel(torch.nn.Module, ABC):
 
         x = self.global_avg_pool(x)
 
-        if self.lstm:
+        if hasattr(self, 'lstm'):
             x = torch.flatten(x, 2)
 
+            x = self.fc(x)
             x, _ = self.lstm(x)
             # select the last step from the lstm
             x = x[:,-1]
 
         else:
+            if self.args.model_name == "ResNet50-3D-MLP":
+                x = x.squeeze(-1).squeeze(-1)
+                x = self.temporal_mlp(x)
+
             x = torch.flatten(x, 1)
 
-        # Latent space representation
-        x = self.fc(x)
+            # Latent space representation
+            x = self.fc(x)
 
         return x if self.return_latent_space else self.output_layer(x)
 
@@ -151,16 +162,68 @@ class ResNet503D(CMRModel):
 
         self.lstm_layers = 1
 
+        # Fully Connected layer (latent space) - corrected this to use latent_dim
+        self.fc = nn.Linear(self._get_feature_dim(), self.latent_dim)
+
+        print("self.latent_dim shape:", self.latent_dim)
+
         # LSTM on top of the encoder to process the temporal dimension of the data
-        self.lstm = nn.LSTM(input_size=self._get_feature_dim(), #//self.timepoints * 2,
-                    hidden_size=self._get_feature_dim(),
+        self.lstm = nn.LSTM(input_size=self.latent_dim, #//self.timepoints * 2,
+                    hidden_size=self.latent_dim,
                     num_layers=self.lstm_layers, batch_first=True)
 
-        print(self.encoder)
+        print(self)
 
         # Freeze backbone during contrastive learning
         if self.contrastive_learning:
             for param in model.parameters():
+                param.requires_grad = False
+            for param in self.lstm.parameters():
+                param.requires_grad = False
+            for param in self.fc.parameters():
+                param.requires_grad = False
+
+        # For ResNet50, we'll keep the full model until the final FC layer
+        # This approach keeps the right architecture for feature extraction
+        return self.encoder
+
+    def _get_feature_dim(self):
+        """Return the feature dimension for ResNet50"""
+        return 2048  # ResNet50 always outputs 2048 features
+
+class ResNet503D_MLP(CMRModel):
+    def initialize_model(self, pretrained: bool):
+        # Get ResNet50 model            
+        model = torch.hub.load('facebookresearch/pytorchvideo', 'slow_r50', pretrained=pretrained)
+
+        # Modify first layer to handle different input channels
+        print("self.input_size", self.input_size)
+
+        # Modify the first convolution layer to match number of channels, grayscale images (MRI) 
+        first_conv_layer = model.blocks[0].conv
+        model.blocks[0].conv = nn.Conv3d(
+            self.input_size, 
+            first_conv_layer.out_channels,
+            kernel_size=first_conv_layer.kernel_size,
+            stride=first_conv_layer.stride,
+            padding=first_conv_layer.padding,
+            bias=False
+        )
+
+        # Remove last block, to return latent space
+        self.encoder = nn.Sequential(*model.blocks[:-1])
+
+        print("self.latent_dim:", self.latent_dim)
+
+        self.temporal_mlp = nn.Linear(self.args.temporal_dim, 1)
+
+        print(model)
+
+        # Freeze backbone during contrastive learning
+        if self.contrastive_learning:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+            for param in self.temporal_mlp.parameters():
                 param.requires_grad = False
 
         # For ResNet50, we'll keep the full model until the final FC layer
@@ -254,6 +317,26 @@ def get_model(model_name, args):
                 num_outputs=num_outputs,
                 args=args
             )
+        elif model_name == "ResNet50-3D-MLP":
+            return ResNet503D_MLP(
+                input_size=input_size,
+                return_latent_space=args.return_latent_space,
+                pretrained=args.pretrained,
+                contrastive_learning=args.contrastive_learning,
+                latent_dim=latent_dim,
+                num_outputs=num_outputs,
+                args=args
+            )
+        elif model_name == "ResNet50-4D":
+            return ResNet504D(
+                input_size=input_size,
+                return_latent_space=args.return_latent_space,
+                pretrained=args.pretrained,
+                contrastive_learning=args.contrastive_learning,
+                latent_dim=latent_dim,
+                num_outputs=num_outputs,
+                args=args
+            )
         elif model_name == "SwinTransformer":
             return SwinTransformer(
                 input_size=input_size,
@@ -283,176 +366,3 @@ def get_model(model_name, args):
         else:
             raise
 
-
-
-
-
-
-
-# class TEMPCODER3D(nn.Module):
-#     def __init__(self, time_shape=(None, 15, 10, 384, 256, 2), cfg=None):
-#         super(TEMPCODER3D, self).__init__()
-#         self.time_shape = time_shape
-#         self.cfg = cfg
-#         self.contrastive_training = False
-#         self.double_head = False
-#         self.timepoints = cfg['params']['timepoints']
-#         self.mlp_layers = cfg['model_params']['mlp_layers']
-#         self.n_classes = cfg['params']['n_classes']
-#         self.mlp_dropout = cfg['train_params']['mlp_dropout']
-#         self.backbone = cfg['train_params']['backbone']
-#         self.end_dimension = cfg['train_params']['end_dimension']
-#         self.pretrained = cfg['train_params']['pretrained']
-#         self.bidirectional = cfg['train_params']['bidirectional']
-#         self.embedding = False
-#         self.max_pool = cfg['train_params']['max_pool']
-#         self.pool_dropout = cfg['train_params']['pool_dropout']
-#         self.transformer = False
-#         self.lstm = cfg['train_params']['lstm']
-#         self.lstm_hidden = cfg['model_params']['lstm_hidden']
-#         self.lstm_layers = cfg['model_params']['lstm_layers']
-#         self.lstm_last = cfg['model_params']['lstm_last_hidden']
-#         # Shape of input (B, C, H, W, D). B - batch size, C - channels, H - height, W - width, D - depth
-#         if self.double_head:
-#             pass
-#         else:
-#             pass
-
-#         #.to('cuda' if torch.cuda.is_available() else 'cpu')
-#         # Output shape: torch.Size([2, 512]
-#         #self.time_distributed = TimeDistributed(self.encoder_model)
-
-#         if not self.max_pool and not self.lstm:
-#             self.end_dimension = self.end_dimension*self.timepoints
-
-#         # self.positional_embedding = PositionalEmbedding(sequence_length=self.end_dimension, output_dim=self.end_dimension)
-
-#         if self.lstm:
-#             self.lstm = nn.LSTM(input_size=self.end_dimension, #//self.timepoints * 2,
-#                     hidden_size=self.lstm_hidden,
-#                     num_layers=self.lstm_layers, batch_first=True)
-#         if self.double_head:
-#             self.lstm_dvf = nn.LSTM(input_size=self.end_dimension,
-#                     hidden_size=self.lstm_hidden,
-#                     num_layers=self.lstm_layers, batch_first=True)
-#         if self.bidirectional: 
-#             self.lstm = nn.LSTM(input_size=self.end_dimension,
-#                     hidden_size=self.lstm_hidden,
-#                     num_layers=self.lstm_layers,
-#                     batch_first=True,
-#                     bidirectional=True)
-#         self.max_pool = nn.AdaptiveMaxPool2d((1,self.end_dimension)) if self.max_pool else None
-#         self.dropout = nn.Dropout(self.pool_dropout)
-
-#         mlp = []
-#         #input_dim = self.lstm_hidden*self.timepoints if self.double_head else self.lstm_hidden*self.timepoints
-#         if self.lstm and self.double_head:
-#             input_dim = self.lstm_hidden*self.timepoints*2
-#         elif self.lstm:
-#             input_dim = self.lstm_hidden*self.timepoints
-#         if self.bidirectional: 
-#             input_dim = self.lstm_hidden*2*self.timepoints
-#         elif self.double_head: 
-#             input_dim = self.end_dimension*2
-#         else: 
-#             input_dim = self.end_dimension
-
-#         if self.lstm_last: input_dim = self.lstm_hidden
-
-#         for layer_size in self.mlp_layers:
-#             mlp.append(nn.Linear(input_dim, layer_size))
-#             mlp.append(nn.BatchNorm1d(layer_size))
-#             mlp.append(nn.ReLU(inplace=True)) # Gelu?
-#             mlp.append(nn.Dropout(self.mlp_dropout))
-#             input_dim = layer_size
-#             # Adding the final layer to output the desired number of classes
-#             mlp.append(nn.Linear(input_dim, self.n_classes))
-#             # mlp.append(nn.Sigmoid())
-
-#         self.output_net = nn.Sequential(*mlp)
-
-
-#     def forward(self, x, emb=None, epoch=None):
-#         #if epoch and epoch == 0: print('DEBUG EMB:', emb.shape)
-#         if len(x.shape) == 5:
-#             x = x.unsqueeze(2)
-#             batch, timepoints, channels, depth, height, width = x.shape
-
-#         # Apply encoder model to each frame in the sequence
-
-
-#         if not self.double_head:
-#             encoded_frames = []
-#         for i in range(timepoints):
-#             # time_shape = (8, 15, 3, 384, 256 ,10)
-#             frame = x[:, i] # Shape: (batch_size, channels, depth, height, width)
-#             encoded_frame = self.encoder_model(frame) # Encode each frame
-#             encoded_frames.append(encoded_frame)
-#             x = torch.stack(encoded_frames, dim=1) # Shape: (batch_size, timepoints, encoded_dim)
-#         if self.contrastive_training: emb = torch.stack([encoded_frames[0], encoded_frames[timepoints//2]], dim=0).detach() # Shape: (batch_size, timepoints, encoded_dim)
-#         else:
-#         #encoded_frames = torch.zeros(batch, timepoints, 2 * self.end_dimension, device=x.device)
-#             encoded_frames = []
-#         # encoded_frames_dvf = []
-#         # for i in range(timepoints):
-#         # frame = x[:, i, 0]
-#         # #xpan dim to keep dimensions consistent
-#         # frame = frame.unsqueeze(1)
-#         # #print('FRAME SHAPE:', frame.shape)
-#         # dvf = x[:, i, 1:]
-#         # #print('DVF SHAPE:', dvf.shape)
-#         # encoded_frame = self.encoder_model(frame)
-#         # encoded_frame_dvf = self.encoder_model_dvf(dvf)
-#         # #encoded_frames[:, i] = torch.cat((encoded_frame, encoded_frame_dvf), dim=1)
-#         # #encoded_frames.append(torch.cat((encoded_frame, encoded_frame_dvf), dim=1))
-#         # encoded_frames.append(encoded_frame)
-#         # encoded_frames_dvf.append(encoded_frame_dvf)
-#         # x = torch.stack(encoded_frames, dim=1)
-#         # x_dvf = torch.stack(encoded_frames_dvf, dim=1)
-#         #print('DEBUG X SHAPE AFTER ENCODER IN SOUBLE HEAD:', x.shape)
-#         #print('DEBUG X_DVF SHAPE AFTER ENCODER IN SOUBLE HEAD:', x_dvf.shape)
-
-
-#         #print('DEBUG:', encoded_frames.shape)
-
-#         # print('DEBUG one encoding:', encoded_frames[0].shape)
-#         # print('len encodingd:', len(encoded_frames))
-#         # if self.transformer:
-#         # x = self.positional_embedding(x)
-#         # # print('DEBUG after positional encodings:', x.shape)
-#         # x = self.transformer(x)
-#         #print('DEBUG after transformer:', x.shape)
-#         if self.lstm:
-#         #print('DEBUG before lstm:', x.shape)
-#             x, _= self.lstm(x) #In shape (bs, t, end_dimension) # Out Shape: (batch_size, timepoints, lstm_hidden)
-#         #print('DEBUG after lstm:', x.shape)
-#         # if self.double_head:
-#         # x_dvf, _= self.lstm_dvf(x_dvf) #In shape (bs, t, end_dimension) # Out Shape: (batch_size, timepoints, lstm_hidden)
-#         #print('DEBUG after lstm:', x_dvf.shape)
-#         #print('DEBUG after lstm:', x.shape)
-#         # if self.max_pool:
-#         # x = self.max_pool(x).squeeze(1)
-#         elif self.lstm_last:
-#             x = x[:,-1] #(batch_size, timepoints, lstm_hidden) -> (batch_size, lstm_hidden)
-#         # else:
-#         # # rearrange to combine the time and feature dimensions
-#         # x = rearrange(x, 'b t f -> b (t f)')
-#         # if self.double_head:
-#         # x_dvf = rearrange(x_dvf, 'b t f -> b (t f)')
-#         # x = torch.cat((x, x_dvf), dim=1)
-#         #print('DEBUG after concat doubke head:', x.shape)
-#         #print('DEBUG after arrange: ', x.shape)
-#         # # concatenate embeddings
-#         # if self.embedding:
-#         # if epoch and epoch == 0: print('DEBUG before concat:', x.shape)
-#         # x = torch.cat((x, emb), dim=1)
-#         # if epoch and epoch == 0: print('DEBUG after concat:', x.shape)
-
-#         # x = self.dropout(x)
-#         #print('DEBUG after dropout:', x)
-#         #print('DEBUG after rearrange: ', x.shape)
-#         # x = self.output_net(x)
-#         #print('DEBUG after output_net:', x)
-#         # print('DEBUG after output_net:', x.shape)
-
-#         return x

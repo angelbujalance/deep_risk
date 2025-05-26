@@ -27,7 +27,7 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
         self.num_outputs = 0
 
         # Print debug info
-        print(f"Initializing CMRModel with latent_dim={self.latent_dim}")
+        print(f"Initializing CMR Model with latent_dim={self.latent_dim}")
 
         # model_name, input_size, latent_dim, num_outputs, args
         print("Type args", type(args))
@@ -36,12 +36,16 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
 
         if os.path.exists(self.args.checkpoint_path_cmr):
             checkpoint = torch.load(self.args.checkpoint_path_cmr, map_location=device)
-            
+
             if self.args.model_name in ["ResNet50", "ResNet50-3D"]:
                 print("loading ResNet50 for 2D image inputs...")
                 load_resnet50(cmr_model=cmr_model, checkpoint_path_cmr=self.args.checkpoint_path_cmr, device=device)
             elif self.args.model_name == "ResNet50-4D":
                 load_resnet50_3D(cmr_model=cmr_model, checkpoint_path_cmr=self.args.checkpoint_path_cmr, device=device)
+            elif self.args.model_name == "ResNet50-3D-MLP":
+                print("Loading ResNet50-3D-MLP...")
+                load_checkpoint(cmr_model, self.args.checkpoint_path_cmr, device)
+                #load_resnet50_3D(cmr_model=cmr_model, checkpoint_path_cmr=self.args.checkpoint_path_cmr, device=device)
             else:
                 checkpoint = torch.load(self.args.checkpoint_path_cmr, map_location=device)
                 print(f"Model keys: {checkpoint.keys()}")
@@ -55,8 +59,12 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
 
         self.cmr_encoder = cmr_model.encoder
 
-        if cmr_model.lstm:
+        if hasattr(cmr_model, 'lstm'):
             self.lstm = cmr_model.lstm
+        elif hasattr(cmr_model, "temporal_mlp"):
+            self.temporal_mlp = cmr_model.temporal_mlp
+            self.cmr_encoder = cmr_model
+            print("self.cmr_encoder:", self.cmr_encoder)
 
         # Apply Average Pooling to the CMR encoder
         if self.args.model_name == "ResNet50-4D":
@@ -64,13 +72,13 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
                                             nn.AdaptiveAvgPool3d(output_size=(1, 1, 1)))
         elif self.args.model_name == "ResNet50-3D":
             self.cmr_encoder = cmr_model
+        elif self.args.model_name == "ResNet50-3D-MLP":
+            self.cmr_encoder.temporal_mlp = cmr_model.temporal_mlp
         else:
             # In 2D resnet, temporal dimension is not provided
             self.cmr_encoder = nn.Sequential(*list(self.cmr_encoder.children()), 
                                             nn.AdaptiveAvgPool2d(output_size=(1, 1))) # or 
 
-        print("self.cmr_feature_dim", self.cmr_feature_dim)
-        print("self.args.projection_dim", self.args.projection_dim)
         self.projection_head_cmr = SimCLRProjectionHead(self.cmr_feature_dim,
                                     self.cmr_feature_dim, self.args.projection_dim)
         
@@ -102,10 +110,17 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
         # required to read out the attention map of the last layer
         self.ecg_encoder.blocks[-1].attn.forward = self._attention_forward_wrapper(self.ecg_encoder.blocks[-1].attn)
 
-        # print("self.ecg_encoder.embed_dim", self.ecg_encoder.embed_dim) # 768 
-        # print("self.args.projection_dim", self.args.projection_dim) # 128
+        print(f"Arguments for the projection heads of the CMR & ECG encoders:")
+        print("self.ecg_encoder.embed_dim", self.ecg_encoder.embed_dim) # 768 
+        try:
+            print("self.cmr_encoder.latent_dim", self.cmr_encoder.latent_dim)
+        except:
+            self.cmr_encoder.latent_dim = self.latent_dim
+            print("self.cmr_encoder.latent_dim", self.cmr_encoder.latent_dim)
 
-        if self.args.model_name == "ResNet50-3D":
+        print("self.args.projection_dim", self.args.projection_dim) # 128
+
+        if self.args.model_name in ["ResNet50-3D", 'ResNet50-3D-MLP']:
             self.projection_head_cmr = SimCLRProjectionHead(self.cmr_encoder.latent_dim,
                                 self.cmr_encoder.latent_dim, self.args.projection_dim)
 

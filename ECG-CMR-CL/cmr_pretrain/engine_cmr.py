@@ -73,22 +73,30 @@ def train_one_epoch(model: torch.nn.Module, optimizer: torch.optim.Optimizer,
         if iter_step % accum_iter == 0:
             adjusted_lr = adjust_learning_rate(optimizer, iter_step / len(data_loader) + epoch, args)
 
-        inputs, labels = data
+        if args.clinical_data:
+            inputs, clinical_data, labels = data
+            clinical_data = clinical_data.to(device, non_blocking=True)
+        else:
+            inputs, labels = data
 
         # print(f"Inputs shape is {inputs.shape}")
 
         inputs = inputs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True) # , dtype=torch.float32)
 
-        # optimizer.zero_grad() # why zero_grad was here?
-
         # amp is used for mixed precision training
-        with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=args.use_amp): 
-            outputs = model(inputs)
+        with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=args.use_amp):
+            if args.clinical_data:
+                outputs = model(inputs, clinical_data)
+            else:
+                outputs = model(inputs)
             assert outputs.dtype is torch.float16
 
-            mask = ~torch.isnan(labels).any(dim=1)
-            loss = loss_fn(outputs[mask], labels[mask])
+            if labels.shape[1] > 1:
+                mask = ~torch.isnan(labels).any(dim=1)
+                loss = loss_fn(outputs[mask], labels[mask])
+            else:
+                loss = loss_fn(outputs, labels)
             assert loss.dtype is torch.float32, f"The dtype of loss is {loss.dtype}"
 
         # loss divided by the effective batch size
@@ -212,39 +220,50 @@ def evaluate_fine_tune(model: torch.nn.Module, data_loader: Iterable, device:tor
     total_loss = 0
     all_preds = []
     all_labels = []
+    all_probs = []
 
     start_time = time.time()
 
     for data in data_loader:
 
-        inputs, labels = data
+        if args.clinical_data:
+            inputs, clinical_data, labels = data
+            clinical_data = clinical_data.to(device, non_blocking=True)
+        else:
+            inputs, labels = data
 
         inputs = inputs.to(device, non_blocking=True) #, dtype=torch.float32)
         labels = labels.to(device, non_blocking=True) #, dtype=torch.float32)
 
-        with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=args.use_amp): 
-            outputs = model(inputs)
+        with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=args.use_amp):
+            if args.clinical_data:
+                outputs = model(inputs, clinical_data)
+            else:
+                outputs = model(inputs)
             assert outputs.dtype is torch.float16
 
             loss = loss_fn(outputs, labels)
             total_loss += loss.item()
             assert loss.dtype is torch.float32, f"The dtype of loss is {loss.dtype}"
 
+        probs = torch.sigmoid(outputs)
         all_preds.append(outputs.cpu().numpy())
         all_labels.append(labels.cpu().numpy())
+        all_probs.append(probs.cpu().numpy())
 
     avg_loss = total_loss /  len(data_loader)
     
     all_preds = np.concatenate(all_preds, axis=0, dtype=np.float64)
     all_labels = np.concatenate(all_labels, axis=0, dtype=np.float64)
+    all_probs = np.concatenate(all_probs, axis=0, dtype=np.float64)
 
-    all_preds = np.clip(all_preds, -1e6, 1e6)
-
-    roc = roc_auc_score(all_labels, all_preds)
-
+    all_preds = np.clip(all_probs, -1e6, 1e6)
     all_preds = (all_preds > 0).astype(int)
-    pre = precision_score(all_labels, all_preds, average='macro')
-    rec = recall_score(all_labels, all_preds, average='macro')
+
+    roc = roc_auc_score(all_labels, all_probs)
+    
+    pre = precision_score(all_labels, all_preds)
+    rec = recall_score(all_labels, all_preds)
     acc = accuracy_score(all_labels, all_preds)
 
     total_time = str(datetime.timedelta(seconds=int(time.time() - start_time)))

@@ -6,8 +6,8 @@ import pandas as pd
 import argparse
 
 from cmr_pretrain.engine_cmr import train_one_epoch, evaluate_fine_tune as evaluate, get_rank, get_world_size, load_checkpoint, save_checkpoint
-from cmr_pretrain.cmr_dataset import CMRDataset
-from ECGEncoder import ECGEncoder, ECGEncoder_dict, ECGPredictor
+from cmr_pretrain.cmr_dataset import CMRDataset, ClincialDataset
+from ECGEncoder import ECGEncoder, ECGEncoder_dict, ECGPredictor, ECGwClinicalPredictor
 
 
 def get_args_parser():
@@ -27,15 +27,24 @@ def get_args_parser():
     parser.add_argument('--min_lr', type=float, default=0.)
     parser.add_argument('--ecg_input_size', default=(12,5000))
     parser.add_argument('--drop_path', default=0.1)
-    parser.add_argument('--global_pool', default=True, type=bool)
+    parser.add_argument('--global_pool', default=False, type=bool)
 
     # CMR model argument
 
     # Data & path arguments
     parser.add_argument('--train_path', type=str, help='Path to the train dataset')
     parser.add_argument('--val_path', type=str, help='Path to the validation dataset')
+    parser.add_argument('--test_path', type=str, help='Path to the test dataset')
     parser.add_argument('--train_labels_path', type=str, help='Path to the labels of the train dataset')
     parser.add_argument('--val_labels_path', type=str, help='Path to the labels of the validation dataset')
+    parser.add_argument('--test_labels_path', type=str, help='Path to the labels of the test dataset')
+
+    # Clinical Data path arguments
+    parser.add_argument('--clinical_data', default=False, type=bool, help='Whether the clinical data is used or not.')
+    parser.add_argument('--train_clinical_path', type=str, help='Path to the clinical information of the train dataset')
+    parser.add_argument('--val_clinical_path', type=str, help='Path to the clinical information of the validation dataset')
+    parser.add_argument('--test_clinical_path', type=str, help='Path to the clinical information of the test dataset')
+
     parser.add_argument('--output_dir', default=None,
                         help='Path to save model checkpoints and results. If None, the checkpoints and results are not saved.')
     parser.add_argument('--checkpoint_path', default='',
@@ -61,6 +70,7 @@ def get_args_parser():
 
     # Reproducibility
     parser.add_argument('--seed', default=42)
+    parser.add_argument('--seed_list', default=[42, 0, 1])
 
     return parser
 
@@ -88,11 +98,14 @@ def main(args):
             #transforms.ToTensor(),
             transforms.Normalize(mean=[0.5], std=[0.5])]) # grey-scale images
 
-    dataset_train = CMRDataset(data_path=args.train_path, labels_path=args.train_labels_path,
-                 train=True, transform=transform_train)
+    dataset_train = ClincialDataset(data_path=args.train_path, labels_path=args.train_labels_path,
+                 train=True, finetune=True, transform=transform_train, clinical_path=args.train_clinical_path, args=args)
 
-    dataset_val = CMRDataset(data_path=args.val_path, labels_path=args.val_labels_path,
-                 train=False, transform=transform_val)
+    dataset_val = ClincialDataset(data_path=args.val_path, labels_path=args.val_labels_path,
+                 train=False, finetune=True, transform=transform_val, clinical_path=args.val_clinical_path, args=args)
+
+    dataset_test = ClincialDataset(data_path=args.test_path, labels_path=args.test_labels_path,
+                train=False, finetune=True, transform=transform_val, clinical_path=args.test_clinical_path, args=args)
 
     num_tasks = get_world_size()
     global_rank = get_rank()
@@ -120,6 +133,15 @@ def main(args):
         drop_last=False,
     )
 
+    data_loader_test = torch.utils.data.DataLoader(
+        dataset_test, sampler=None,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
+        drop_last=False,
+    )
+
     # get model retrieves the CMR model (SwinTransformer or RestNet50)
     enocder_model = ECGEncoder_dict[args.model_name](
         img_size=args.ecg_input_size,
@@ -130,7 +152,13 @@ def main(args):
         global_pool=args.global_pool,
     )
 
-    model = ECGPredictor(base_encoder=enocder_model, output_dim=6, embed_dim=576).to(device)
+    print("args.num_outputs:", args.num_outputs)
+    if args.clinical_data:
+        model = ECGwClinicalPredictor(base_encoder=enocder_model, output_dim=int(args.num_outputs)).to(device)
+    else:
+        model = ECGPredictor(base_encoder=enocder_model, output_dim=int(args.num_outputs)).to(device)
+
+    print("model:", model)
 
     model.to(device, non_blocking=True)
 
@@ -149,7 +177,7 @@ def main(args):
     best_loss = float("inf")
     epochs_wo_improvement = 0
 
-    loss_fn = torch.nn.CrossEntropyLoss() # classification
+    loss_fn = torch.nn.BCEWithLogitsLoss() # classification
 
     # retrieve the pre-trained model from a checkpoint
     model_checkpoint = {}
@@ -164,11 +192,10 @@ def main(args):
         except:
             for key, value in checkpoint["model_state_dict"].items():
                 # Get the encoder part of the ViT MAE pre-trained model
-                if not any(key.startswith(prefix) for prefix in ['decoder', 'mask_token', 'predictor', 'projector', 'head.weight', 'head.bias']):
+                if not any(key.startswith(prefix) for prefix in ['decoder', 'mask_token', 'predictor', 'projector',"fc_norm.weight", "fc_norm.bias", "head.weight", "head.bias"]):
                     model_checkpoint[key] = value
-        
-        # "head.weight", "head.bias", "fc_norm.weight", "fc_norm.bias" are missing, and initialized
-        model.load_state_dict(model_checkpoint, strict=False)
+
+        model.encoder.load_state_dict(model_checkpoint, strict=True)
     else:
         print("No pre-trained ECG encoder loaded")
 
@@ -211,9 +238,27 @@ def main(args):
 
     eval_metrics_df.to_csv(f"evaluation_metrics_{args.model_name}.csv")
 
+    print("\nFinal evaluation metrics on test set:")
+    test_metrics = evaluate(model=model, data_loader=data_loader_test, device=device,
+                        device_type=device_type, loss_fn=loss_fn, args=args)
+
+    return test_metrics['roc']
+
 
 if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
 
-    main(args)
+    if args.seed_list:
+        roc_scores = []
+        for seed in args.seed_list:
+            args.seed = seed
+            roc_score = main(args)
+            roc_scores.append(roc_score)
+
+        print("\nAVERAGE: Final evaluation metrics on test set %:")
+        print(np.round(np.mean(roc_scores) * 100, 3))
+        print("\STD: Final evaluation metrics on test set:")
+        print(np.round(np.std(roc_scores) * 100, 3))
+    else:
+        main(args)
