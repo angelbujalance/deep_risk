@@ -91,9 +91,6 @@ for filename in os.listdir(ecg_folder_path):
             tensors.append(file_tensor)
             tensor_ECG_original.append(original_ECG)
             ids.append(id_)
-            # count += 1
-            # if count == 200:
-            #      break
 
         except ET.ParseError as e:
             print(f"Error parsing {filename}: {e}")

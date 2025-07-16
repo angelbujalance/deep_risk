@@ -1,10 +1,10 @@
 import torch
 from sklearn.model_selection import train_test_split
-from pre_process_ecg_utils import normalize_leads
+from pre_process_ecg_utils import normalize_leads, normalize_per_patient
 import numpy as np
 
 # Load the full dataset: 10-s, 12-lead ECG, original samplig rate frequency 500 Hz
-loaded_data = torch.load("full_data_ECGs_w_IDs.pth")
+loaded_data = torch.load("/projects/prjs1252/CL_data/ECG_data/full_data_ECGs_w_IDs.pth")
 
 participant_ids = loaded_data["IDs"]  # List of participant IDs
 full_data = loaded_data["ECG_tensors"].to(dtype=torch.float32)  # Shape: (N, 12, 5000)
@@ -16,10 +16,13 @@ einthoven_idx = [0, 1, 2]  # I, II, III
 goldberg_idx = [3, 4, 5]   # aVR, aVL, aVF
 wilson_idx = [6, 7, 8, 9, 10, 11]  # V1-V6
 
-# Apply normalization separately for each lead group
-full_data = normalize_leads(full_data, einthoven_idx)
-full_data = normalize_leads(full_data, goldberg_idx)
-full_data = normalize_leads(full_data, wilson_idx)
+# # Apply normalization separately for each lead group
+# full_data = normalize_leads(full_data, einthoven_idx)
+# full_data = normalize_leads(full_data, goldberg_idx)
+# full_data = normalize_leads(full_data, wilson_idx)
+
+# Apply Per-Patient Normalization
+full_data = normalize_per_patient(full_data)
 
 # Convert PyTorch tensor to NumPy for sklearn
 full_data_np = full_data.numpy()
@@ -48,9 +51,13 @@ print(f"Validation set shape: {val_data.shape}")
 print(f"Test set shape: {test_data.shape}")
 
 # Save the datasets
-torch.save(train_data, "ECG_leads_train.pt")
-torch.save(val_data, "ECG_leads_val.pt")
-torch.save(test_data, "ECG_leads_test.pt")
+# torch.save(train_data, "ECG_leads_train.pt")
+# torch.save(val_data, "ECG_leads_val.pt")
+# torch.save(test_data, "ECG_leads_test.pt")
+
+torch.save(train_data, "/projects/prjs1252/CL_data/ECG_data/ECG_leads_train_per_pat.pt")
+torch.save(val_data, "/projects/prjs1252/CL_data/ECG_data/ECG_leads_val_per_pat.pt")
+torch.save(test_data, "/projects/prjs1252/CL_data/ECG_data/ECG_leads_test_per_pat.pt")
 
 # Save the IDs
 torch.save(train_ids, "ECG_ids_train.pt")

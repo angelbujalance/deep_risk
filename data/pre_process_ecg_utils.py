@@ -12,6 +12,13 @@ def normalize_leads(full_data, lead_indices):
     full_data[:, lead_indices, :] = (full_data[:, lead_indices, :] - mean) / std  # Normalize selected leads
     return full_data
 
+def normalize_per_patient(full_data):
+    mean = full_data.mean(dim=(1, 2), keepdim=True)
+    std = full_data.std(dim=(1, 2), keepdim=True)
+
+    # add small epsilon in case of std being 0, i.e. in flat not-recorded ECGs
+    return (full_data - mean) / (std + 1e-5) 
+
 
 def butter_bandpass(lowcut, highcut, fs, order=4):
     nyq = 0.5 * fs # half the sampling rate

@@ -6,7 +6,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=6:00:00
-#SBATCH --output=output/obtain_train_val_test_splits.out
+#SBATCH --output=output/obtain_train_val_test_splits_normal_by_patients.out
 
-python ecg_data_to_torch.py
+# python ecg_data_to_torch.py
 python train_test_splits.py
