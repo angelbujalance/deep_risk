@@ -32,6 +32,9 @@ assert len(pheno_fields) == 82
 
 # print("ids_df.shape", ids_df.shape)
 
+# subselection for systole features
+pheno_fields = ['f.24101.2.0', 'f.24102.2.0', 'f.24104.2.0', 'f.24107.2.0', 'f.24108.2.0']
+
 # append the id field to match with the patients data
 pheno_fields.append('f.eid')
 
@@ -44,4 +47,4 @@ pheno_data = pd.read_csv('work2/0/aus20644/data/ukbiobank/phenotypes/ukb678882.t
 print("pheno_data.head()")
 print(pheno_data.head())
 
-pheno_data.to_csv('/home/abujalancegome/deep_risk/cmr_pretrain/labels/all_labels_CMR_pretrain.csv')
+pheno_data.to_csv('/home/abujalancegome/deep_risk/ECG-CMR-CL/cmr_pretrain/labels/labels_CMR_pretrain_systole.csv')

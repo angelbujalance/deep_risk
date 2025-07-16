@@ -18,15 +18,15 @@ def main(args):
     ecg_ids = {}
 
     # the CL train, val, test splits will contain the same splits as in the ECG splits
-    cmr_idx_ids = pd.read_csv('/home/abujalancegome/deep_risk/ECG-CMR-CL/cmr_pretrain/labels/ids_cmr_dataset.csv',
+    cmr_idx_ids = pd.read_csv('/home/abujalancegome/deep_risk/ukbb_cardiac/data/ids_cropped_images.csv',
                               header=None, names=['ids'])
     cmr_idx_ids['CMR idx'] = np.arange(0, len(cmr_idx_ids['ids']), 1)
 
-    cmr_tensor = torch.load(os.path.join(args.cmr_data_dir, f"cmr_tensors_ts_all.pt"))
+    cmr_tensor = torch.load(os.path.join(args.cmr_data_dir, f"cmr_tensors_ts_all_diastole.pt"))
 
     for split in ["train", "val", "test"]:
-        ecg_ids[split] = torch.load(os.path.join(args.ecg_data_dir, f"ECG_ids_{split}.pt"))
-        ecg_tensor = torch.load(os.path.join(args.ecg_data_dir, f"ECG_leads_{split}.pt"))
+        ecg_ids[split] = torch.load(os.path.join(args.ecg_data_dir, f"ECG_ids_{split}_per_pat.pt"))
+        ecg_tensor = torch.load(os.path.join(args.ecg_data_dir, f"ECG_leads_{split}_per_pat.pt"))
 
         ecg_ids[split] = ecg_ids[split].tolist()
         ecg_ids_df = pd.DataFrame(ecg_ids[split], columns=['ids'])
@@ -54,8 +54,8 @@ def main(args):
         print(f"CMR {split} tensor shape:", cmr_split_tensor.shape)
         print(f"ECG {split} tensor shape:", ecg_split_tensor.shape)
 
-        torch.save(ecg_split_tensor, os.path.join(args.output_dir, f"CL_ECG_leads_{split}_3d.pt"))
-        torch.save(cmr_split_tensor, os.path.join(args.output_dir, f"CL_cmr_tensor_{split}_3d.pt"))
+        torch.save(ecg_split_tensor, os.path.join(args.output_dir, f"CL_ECG_leads_diastole_{split}_3d_patients_norm.pt"))
+        torch.save(cmr_split_tensor, os.path.join(args.output_dir, f"CL_cmr_tensor_diastole_{split}_3d_patients_norm.pt"))
 
 
 if __name__ == '__main__':

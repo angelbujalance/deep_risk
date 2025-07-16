@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import numpy as np
 import re
+from sklearn.preprocessing import OneHotEncoder
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Generate the CL dataset based on the ECG and the CMR data paths',
@@ -67,11 +68,12 @@ def main(args):
     pheno_data = pd.read_csv('work2/0/aus20644/data/ukbiobank/phenotypes/ukb678882.tab.gz',
                         sep='\t', compression='gzip',
                         nrows=0
-                        ) 
+                        )
 
     # diagnostic columns corresponding to clinical aspects such as sex or smoking
-    diagn_cols = ['f.31.0.0', 'f.21003.2.0', 'f.20116.2.0', 'f.4080.2.0',
-                  'f.23400.0.0', 'f.23406.0.0', 'f.23405.0.0']
+    diagn_cols = ['f.31.0.0', 'f.21003.2.0', 'f.20116.2.0', 'f.4080.2.0', 'f.4080.0.0',
+                  'f.23400.0.0', 'f.23406.0.0', 'f.23405.0.0', 'f.21001.2.0', 'f.21001.0.0',
+                  'f.1558.2.0']
     diagn_cols.append('f.eid')
 
     print(diagn_cols)
@@ -119,9 +121,58 @@ def main(args):
     # Percentage of rows with NaNs
     nan_percentage = (nan_rows_count / total_rows) * 100
 
+    # Count number of NaN by columns
+    nan_per_column = train_endpoint_labels.isna().sum()
+
+    # Percentage of NaNs per column
+    nan_per_col_percentage = (nan_per_column / total_rows) * 100
+
     print(f"Rows with NaNs: {nan_rows_count}")
     print(f"Percentage of rows with NaNs: {nan_percentage:.2f}%")
-    exit()
+    print(f"Percentage of rows with NaNs: {nan_per_col_percentage.round(2)}%")
+
+    # Impute missing values
+    train_endpoint_labels['f.21003.2.0'] = train_endpoint_labels['f.21003.2.0'].fillna(train_endpoint_labels['f.21003.2.0'].mean())
+    train_endpoint_labels['f.20116.2.0'] = train_endpoint_labels['f.20116.2.0'].fillna(train_endpoint_labels['f.20116.2.0'].median())
+    train_endpoint_labels['f.21001.2.0'] = train_endpoint_labels['f.21001.2.0'].fillna(train_endpoint_labels['f.21001.0.0'])
+    train_endpoint_labels['f.21001.2.0'] = train_endpoint_labels['f.21001.2.0'].fillna(train_endpoint_labels['f.21001.2.0'].mean())
+    train_endpoint_labels['f.4080.2.0'] = train_endpoint_labels['f.4080.2.0'].fillna(train_endpoint_labels['f.4080.0.0'])
+    train_endpoint_labels['f.4080.2.0'] = train_endpoint_labels['f.4080.2.0'].fillna(train_endpoint_labels['f.4080.2.0'].mean())
+
+    train_endpoint_labels['f.1558.2.0'] = train_endpoint_labels['f.1558.2.0'].fillna(6)
+
+    train_endpoint_labels = train_endpoint_labels.drop(columns=['f.4080.0.0', 'f.21001.0.0', 'f.23400.0.0', 'f.23405.0.0', 'f.23406.0.0'])
+
+    # Count rows with at least one NaN
+    nan_rows_count = train_endpoint_labels.isna().any(axis=1).sum()
+
+    # Total number of rows
+    total_rows = len(train_endpoint_labels)
+
+    # Percentage of rows with NaNs
+    nan_percentage = (nan_rows_count / total_rows) * 100
+
+    # Count number of NaN by columns
+    nan_per_column = train_endpoint_labels.isna().sum()
+
+    # Percentage of NaNs per column
+    nan_per_col_percentage = (nan_per_column / total_rows) * 100
+
+    print(f"Percentage of rows with NaNs: {nan_percentage:.2f}%")
+    print(f"Percentage of rows with NaNs:\n {nan_per_col_percentage.round(2)}%")
+
+    encoder = OneHotEncoder(sparse=False, dtype=int)  # sparse=True returns a sparse matrix
+    train_endpoint_labels['f.1558.2.0'] = train_endpoint_labels['f.1558.2.0'].astype(int)
+    encoded_array = encoder.fit_transform(train_endpoint_labels[['f.1558.2.0']])
+
+    encoded_df = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out(['f.1558.2.0']), index=train_endpoint_labels.index)
+    print("'f.1558.2.0'\n:", train_endpoint_labels['f.1558.2.0'].head())
+    train_endpoint_labels = train_endpoint_labels.drop(columns=['f.1558.2.0'])
+    train_endpoint_labels = pd.concat([train_endpoint_labels, encoded_df], axis=1)
+    print("train_endpoint_labels\n:", train_endpoint_labels.head())
+    print("train_endpoint_labels\n:", train_endpoint_labels.tail())
+    train_endpoint_labels.to_csv(os.path.join(args.output_dir, "ECG_fine_tune_train_clinical_input.csv"), index=False, header=False)
+
 
     val_endpoint_labels = endpoint_labels[endpoint_labels.loc[:, "f.eid"].isin(ECG_ids_val)]
     print(val_endpoint_labels.shape)
@@ -137,7 +188,45 @@ def main(args):
     val_endpoint_labels = val_endpoint_labels.set_index("f.eid").loc[ECG_ids_val]
     test_endpoint_labels = test_endpoint_labels.set_index("f.eid").loc[ECG_ids_test]
 
-    train_endpoint_labels.to_csv(os.path.join(args.output_dir, "ECG_fine_tune_train_clinical_input.csv"), index=False, header=False)
+    # Impute missing values
+    val_endpoint_labels['f.21003.2.0'] = val_endpoint_labels['f.21003.2.0'].fillna(train_endpoint_labels['f.21003.2.0'].mean())
+    val_endpoint_labels['f.20116.2.0'] = val_endpoint_labels['f.20116.2.0'].fillna(val_endpoint_labels['f.20116.2.0'].median())
+    val_endpoint_labels['f.21001.2.0'] = val_endpoint_labels['f.21001.2.0'].fillna(val_endpoint_labels['f.21001.0.0'])
+    val_endpoint_labels['f.21001.2.0'] = val_endpoint_labels['f.21001.2.0'].fillna(train_endpoint_labels['f.21001.2.0'].mean())
+    val_endpoint_labels['f.4080.2.0'] = val_endpoint_labels['f.4080.2.0'].fillna(val_endpoint_labels['f.4080.0.0'])
+    val_endpoint_labels['f.4080.2.0'] = val_endpoint_labels['f.4080.2.0'].fillna(train_endpoint_labels['f.4080.2.0'].mean())
+
+    val_endpoint_labels['f.1558.2.0'] = val_endpoint_labels['f.1558.2.0'].fillna(6)
+
+    encoder = OneHotEncoder(sparse=False, dtype=int)  # sparse=True returns a sparse matrix
+    encoded_array = encoder.fit_transform(val_endpoint_labels[['f.1558.2.0']])
+
+    encoded_df = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out(['f.1558.2.0']), index=val_endpoint_labels.index)
+    val_endpoint_labels = val_endpoint_labels.drop(columns=['f.1558.2.0'])
+    val_endpoint_labels = pd.concat([val_endpoint_labels, encoded_df], axis=1)
+
+    val_endpoint_labels = val_endpoint_labels.drop(columns=['f.4080.0.0', 'f.21001.0.0', 'f.23400.0.0', 'f.23405.0.0', 'f.23406.0.0'])
+
+
+    test_endpoint_labels['f.21003.2.0'] = test_endpoint_labels['f.21003.2.0'].fillna(train_endpoint_labels['f.21003.2.0'].mean())
+    test_endpoint_labels['f.20116.2.0'] = test_endpoint_labels['f.20116.2.0'].fillna(test_endpoint_labels['f.20116.2.0'].median())
+    test_endpoint_labels['f.21001.2.0'] = test_endpoint_labels['f.21001.2.0'].fillna(test_endpoint_labels['f.21001.0.0'])
+    test_endpoint_labels['f.21001.2.0'] = test_endpoint_labels['f.21001.2.0'].fillna(train_endpoint_labels['f.21001.2.0'].mean())
+    test_endpoint_labels['f.4080.2.0'] = test_endpoint_labels['f.4080.2.0'].fillna(test_endpoint_labels['f.4080.0.0'])
+    test_endpoint_labels['f.4080.2.0'] = test_endpoint_labels['f.4080.2.0'].fillna(train_endpoint_labels['f.4080.2.0'].mean())
+
+    test_endpoint_labels['f.1558.2.0'] = test_endpoint_labels['f.1558.2.0'].fillna(6)
+
+    encoder = OneHotEncoder(sparse=False, dtype=int)  # sparse=True returns a sparse matrix
+    encoded_array = encoder.fit_transform(test_endpoint_labels[['f.1558.2.0']])
+
+    encoded_df = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out(['f.1558.2.0']), index=test_endpoint_labels.index)
+    test_endpoint_labels = test_endpoint_labels.drop(columns=['f.1558.2.0'])
+    test_endpoint_labels = pd.concat([test_endpoint_labels, encoded_df], axis=1)
+
+    test_endpoint_labels = test_endpoint_labels.drop(columns=['f.4080.0.0', 'f.21001.0.0', 'f.23400.0.0', 'f.23405.0.0', 'f.23406.0.0'])
+
+    # train_endpoint_labels.to_csv(os.path.join(args.output_dir, "ECG_fine_tune_train_clinical_input.csv"), index=False, header=False)
     val_endpoint_labels.to_csv(os.path.join(args.output_dir, "ECG_fine_tune_val_clinical_input.csv"), index=False, header=False)
     test_endpoint_labels.to_csv(os.path.join(args.output_dir, "ECG_fine_tune_test_clinical_input.csv"), index=False, header=False)
 
@@ -145,4 +234,10 @@ if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
 
-    main(args)
+    # main(args)
+    train_endpoint_labels = pd.read_csv(os.path.join(args.output_dir, "ECG_fine_tune_train_clinical_input.csv"), header=None)
+    print(train_endpoint_labels.head())
+    train_endpoint_labels = train_endpoint_labels.drop(columns=[0])
+    print(train_endpoint_labels.head())
+
+    train_endpoint_labels.to_csv(os.path.join(args.output_dir, "ECG_fine_tune_train_clinical_input.csv"), index=False, header=False)

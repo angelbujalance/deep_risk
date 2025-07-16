@@ -36,14 +36,22 @@ def main(args):
         "heart_failure": [f'I{num}' for num in range(500, 510)],            # ICD I50
         "myocardial_infarction": [f'I{num}' for num in range(250, 260)],    # ICD I25
         "cardiomyopathy": [f'I{num}' for num in range(420, 430)],           # ICD I42
+        "LV_end_diastolic": 'f.24100.2.0',                                  # LV end diastolic volume
+        "LV_end_systolic": 'f.24101.2.0',                                   # LV end systolic volume
+        "LV_ejection_fraction": 'f.24103.2.0',                              # LVEF
     }
 
+    exclude_keys = {
+        "LV_end_diastolic",
+        "LV_end_systolic",
+        "LV_ejection_fraction"
+    }
     for split in ["train", "val", "test"]:
         np.random.seed(42)
 
         # Load ECG tensor and labels
         train_labels = pd.read_csv(os.path.join(args.output_dir, f"ECG_fine_tune_{split}_labels.csv"), header=None)
-        clinical_inputs = pd.read_csv(os.path.join(args.output_dir, f"ECG_fine_tune_{split}_clinical_input.csv"), header=None)
+        clinical_inputs = pd.read_csv(os.path.join("/home/abujalancegome/deep_risk/data", f"ECG_fine_tune_{split}_clinical_input.csv"), header=None)
 
         print("train_labels.head()", train_labels.head())
         print("train_labels.type()", type(train_labels))
@@ -56,10 +64,27 @@ def main(args):
         # if split == "val":
         #    train_ECG_leads = train_ECG_leads.squeeze(1)
         print(train_ECG_leads.shape)
-    
+
         for pos, endpoint_code in enumerate(endpoint_codes.keys()):
 
             # select the indexes with at least one positive case
+            print(f"----- Processing {endpoint_code} at {split} -----:")
+            if endpoint_code in exclude_keys:
+                train_labels_clean = train_labels[pos].dropna()
+                train_indices = train_labels_clean.index
+
+                balanced_train_labels = train_labels[pos].iloc[train_indices].reset_index(drop=True)
+
+                print(f"balanced_train_labels for {endpoint_code}:", balanced_train_labels.shape)
+                print(f"number of true cases for {endpoint_code}:", balanced_train_labels.sum())
+                balanced_train_labels.to_csv(os.path.join(args.output_dir, f"ECG_balanced_{endpoint_code}_{split}_labels.csv"), header=False, index=False)
+
+                del balanced_train_labels
+
+                balanced_train_ECG_leads = train_ECG_leads[train_indices]
+                torch.save(balanced_train_ECG_leads, os.path.join(args.output_dir, f"ECG_balanced_{endpoint_code}_{split}_leads.pt"))
+                del balanced_train_ECG_leads
+                continue
             positive_mask = train_labels[pos] > 0
             negative_mask = ~positive_mask
 
@@ -80,8 +105,8 @@ def main(args):
             # get balanced data and labels
             balanced_train_labels = train_labels[pos].iloc[train_indices].reset_index(drop=True)
             unbalanced_train_labels = train_labels[pos]
-            print("balanced_train_labels:", balanced_train_labels.shape)
-            print("number of true cases:", balanced_train_labels.sum())
+            print(f"balanced_train_labels for {endpoint_code}:", balanced_train_labels.shape)
+            print(f"number of true cases for {endpoint_code}:", balanced_train_labels.sum())
             balanced_train_labels.to_csv(os.path.join(args.output_dir, f"ECG_balanced_{endpoint_code}_{split}_labels.csv"), header=False, index=False)
             unbalanced_train_labels.to_csv(os.path.join(args.output_dir, f"ECG_unbalanced_{endpoint_code}_{split}_labels.csv"), header=False, index=False)
             del balanced_train_labels, unbalanced_train_labels

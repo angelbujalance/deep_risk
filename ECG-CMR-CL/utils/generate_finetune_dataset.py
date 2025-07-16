@@ -20,11 +20,13 @@ def align_ECG_data_and_pheno_data(pheno_data: pd.DataFrame, split: str, args) ->
 
     os.chdir(args.ecg_data_dir)
 
+    print(f"Current working directory: {os.getcwd()}")
+
     # filter the IDs if not in ECG path
-    ECG_ids = torch.load(f"ECG_ids_{split}.pt").numpy().astype(int)
+    ECG_ids = torch.load(f"/home/abujalancegome/deep_risk/data/ECG_ids_{split}.pt").numpy().astype(int)
 
     # load the ECG tensors
-    ECG_leads = torch.load(f"ECG_leads_{split}.pt").numpy()
+    ECG_leads = torch.load(f"ECG_leads_{split}_per_pat.pt").numpy()
 
     # Find which IDs from ECG_ids_train are missing in pheno_data
     missing_ids = [id_ for id_ in ECG_ids if id_ not in pheno_data["f.eid"].values]
@@ -70,6 +72,9 @@ def main(args):
                         ) # age imaginig visit, sex, QRS duration, QRS num
     diagn_cols = [col for col in pheno_data.columns if re.search('41270', col)]
     diagn_cols.append('f.eid')
+    diagn_cols.append('f.24100.2.0') # LV end diastolic volume
+    diagn_cols.append('f.24101.2.0') # LV end systolic volume
+    diagn_cols.append('f.24103.2.0') # LVEF
 
     # Load the TSV file (gzip compressed) with the diagnosis columnns
     pheno_data = pd.read_csv('work2/0/aus20644/data/ukbiobank/phenotypes/ukb678882.tab.gz',
@@ -89,9 +94,23 @@ def main(args):
         "heart_failure": [f'I{num}' for num in range(500, 510)],            # ICD I50
         "myocardial_infarction": [f'I{num}' for num in range(250, 260)],    # ICD I25
         "cardiomyopathy": [f'I{num}' for num in range(420, 430)],           # ICD I42
+        "LV_end_diastolic": 'f.24100.2.0',                                  # LV end diastolic volume
+        "LV_end_systolic": 'f.24101.2.0',                                   # LV end systolic volume
+        "LV_ejection_fraction": 'f.24103.2.0',                              # LVEF
+
+    }
+
+    exclude_keys = {
+        "LV_end_diastolic",
+        "LV_end_systolic",
+        "LV_ejection_fraction"
     }
 
     for endpoint, codes in endpoint_codes.items():
+        if endpoint in exclude_keys:
+            pheno_data[endpoint] = pheno_data[codes]
+            continue
+
         pheno_data[endpoint] = pheno_data.apply(
             lambda row: any(code in row.values for code in codes), axis=1
         )
