@@ -3,7 +3,7 @@ import torchvision.transforms as transforms
 import numpy as np
 import pandas as pd
 import argparse
-from engine_cmr import train_one_epoch, evaluate, get_rank, get_world_size, load_checkpoint, save_checkpoint
+from engine_cmr import train_one_epoch, evaluate, get_rank, get_world_size, load_checkpoint, save_checkpoint, load_resnet50, load_resnet50_3D
 from cmr_dataset import CMRDataset
 from models_cmr import get_model
 
@@ -37,6 +37,7 @@ def get_args_parser():
                         help='Path to save model checkpoints and results. If None, the checkpoints and results are not saved.')
     parser.add_argument('--checkpoint_path', default='',
                         help='Path to the saved model checkpoint. If None, training from scratch.')
+    parser.add_argument('--clinical_data', default=False)
 
     # Optimizer arguments
     parser.add_argument('--weight_decay', default=0.005)
@@ -88,11 +89,17 @@ def main(args):
     dataset_train = CMRDataset(data_path=args.train_path, labels_path=args.train_labels_path,
                  train=True, transform=transform_train)
 
+    print("len dataset_train:", len(dataset_train))
+
     dataset_val = CMRDataset(data_path=args.val_path, labels_path=args.val_labels_path,
                  train=False, transform=transform_val)
     
+    print("len dataset_val:", len(dataset_val))
+
     dataset_test = CMRDataset(data_path=args.test_path, labels_path=args.test_labels_path,
                  train=False, transform=transform_val)
+
+    print("len dataset_test:", len(dataset_test))
 
     num_tasks = get_world_size()
     global_rank = get_rank()
@@ -217,8 +224,68 @@ def main(args):
                         device_type=device_type, loss_fn=loss_fn, args=args)
 
 
+def evualte_test_set(args):
+    device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    print(f"Training on {device_type}")
+    # torch.set_default_device(device)
+
+    device = torch.device(device_type)
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
+    transform_test = transforms.Compose([
+            # transforms.Resize(args.input_size, interpolation=3),  # 3 is bicubic
+            #transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5], std=[0.5])]) # grey-scale images
+    
+    dataset_test = CMRDataset(data_path=args.test_path, labels_path=args.test_labels_path,
+                 train=False, transform=transform_test)
+
+    data_loader_test = torch.utils.data.DataLoader(
+        dataset_test, sampler=None,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
+        # generator=generator,
+        drop_last=False,
+    )
+
+    # get model retrieves the CMR model (SwinTransformer or RestNet50)
+    model = get_model(model_name=args.model_name, args=args)
+
+    model.to(device, non_blocking=True)
+
+    eff_batch_size = args.batch_size * args.accum_iter * get_world_size()
+    print(f"Effective batch size given batch size and accumulate gradient iterations is {eff_batch_size}.")
+
+    # param_groups = optim_factory.add_weight_decay(model, args.weight_decay)    
+    # optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
+    print("args.weight_decay", float(args.weight_decay))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=float(args.weight_decay))
+
+    grad_scaler = torch.amp.GradScaler(enabled=args.use_amp)
+
+    loss_fn = torch.nn.MSELoss()
+
+    # load models from checkpoints if path is provided
+    if args.checkpoint_path:
+        load_checkpoint(model, args.checkpoint_path, device, optimizer)
+    else:
+        print("No module loaded and evaluating a non-trained model.")
+
+    print("\nFinal evaluation metrics on test set:")
+    test_metrics = evaluate(model=model, data_loader=data_loader_test, device=device,
+                        device_type=device_type, loss_fn=loss_fn, args=args)
+
+    return test_metrics['r2']
+
 if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
 
-    main(args)
+    # main(args)
+
+    evualte_test_set(args)

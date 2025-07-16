@@ -1,32 +1,30 @@
 #!/bin/bash
 
-#SBATCH --partition=gpu_a100
+#SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
-#SBATCH --job-name=CMR_DIAST
+#SBATCH --job-name=CMR_pret
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=20:00:00
-#SBATCH --output=output/cmr_pretrain_3D_diastole_dataset_shape.out
+#SBATCH --time=2:05:00
+#SBATCH --output=output/cmr_pretrain_FULL_DATA_3D_diastole_13_labels.out
 
 # Activate your environment
 source activate cmr_pretrain
 
 # DATA DIRECTORIES
-DATA_DIR='/projects/prjs1252/CL_data/cmr_tensors_ts_0_train.pt'
-VAL_DIR='/projects/prjs1252/CL_data/cmr_tensors_ts_0_val.pt'
-TEST_DIR='/projects/prjs1252/CL_data/cmr_tensors_ts_0_test.pt'
+DATA_DIR='/projects/prjs1252/CL_data/cmr_tensors_diastole_train_3D_labels.pt'
+VAL_DIR='/projects/prjs1252/CL_data/cmr_tensors_diastole_val_3D_labels.pt'
+TEST_DIR='/projects/prjs1252/CL_data/cmr_tensors_diastole_test_3D_labels.pt'
 
 # LABELS
-TRAIN_LABELS_PTH="$HOME/deep_risk/ECG-CMR-CL/cmr_pretrain/labels/labels_CMR_pretr_trn.csv"
-VAL_LABELS_PTH="$HOME/deep_risk/ECG-CMR-CL/cmr_pretrain/labels/labels_CMR_pretr_val.csv"
-TEST_LABELS_PTH="$HOME/deep_risk/ECG-CMR-CL/cmr_pretrain/labels/labels_CMR_pretr_tst.csv"
+TRAIN_LABELS_PTH="$HOME/deep_risk/ECG-CMR-CL/cmr_pretrain/labels/labels_CMR_diastole_CMR_pretrain_trn_13_labels.csv"
+VAL_LABELS_PTH="$HOME/deep_risk/ECG-CMR-CL/cmr_pretrain/labels/labels_CMR_diastole_CMR_pretrain_val_13_labels.csv"
+TEST_LABELS_PTH="$HOME/deep_risk/ECG-CMR-CL/cmr_pretrain/labels/labels_CMR_diastole_CMR_pretrain_tst_13_labels.csv"
 
 
 # LOAD CHECKPOINTS
-checkpoint="/home/abujalancegome/deep_risk/ECG-CMR-CL/cmr_pretrain/CMR_pretrain/3D_diastole/ResNet503D_MLP_checkpoint-99-loss-107.25341754489475-lr-0.0001-wd-1e-5-ai-1.pth"
-
-checkpoint="/home/abujalancegome/deep_risk/ECG-CMR-CL/cmr_pretrain/CMR_pretrain/2D/ResNet50_checkpoint-180-loss-365.94007568359376-lr-0.0001-wd-1e-5-ai-1.pth"
-
+# checkpoint="$HOME/deep_risk/ECG-CMR-CL/cmr_pretrain/CMR_pretrain/ResNet50_checkpoint-196-loss-415.7585052490234-lr-1e-06-wd-1e-5-ai-1.pth"
+checkpoint="/home/abujalancegome/deep_risk/ECG-CMR-CL/cmr_pretrain/CMR_pretrain/3D_10_labels_MLP/ResNet503D_MLP_checkpoint-197-loss-88.57962832243547-lr-0.0001-wd-1e-5-ai-1.pth"
 export CUDA_LAUNCH_BLOCKING=1
 
 # 30 nans
@@ -59,7 +57,7 @@ do
             echo ""
             echo "Running with lr=$lr, weight_decay=$wd, accum_iter=$ai"
 
-            python pretrain_cmr.py --model_name ResNet50 \
+            python pretrain_cmr.py --model_name ResNet50-3D-MLP \
                 --batch_size 96 \
                 --train_path ${DATA_DIR} \
                 --val_path ${VAL_DIR} \
@@ -67,14 +65,12 @@ do
                 --train_labels_path ${TRAIN_LABELS_PTH} \
                 --val_labels_path ${VAL_LABELS_PTH} \
                 --test_labels_path ${TEST_LABELS_PTH} \
-                --num_outputs 3 \
-                --epochs 200 \
-                --checkpoint_path ${checkpoint} \
-                --output_dir CMR_pretrain/3D_diastole \
+                --num_outputs 13 \
+                --epochs 400 \
+                --temporal_dim 6 \
+                --output_dir CMR_pretrain/3D_diastole_13_labels \
                 --accum_iter ${ai} \
                 --lr ${lr} \
-                --checkpoint_path ${checkpoint} \
-                --temporal_dim 6 \
                 --weight_decay ${wd}
         done
     done

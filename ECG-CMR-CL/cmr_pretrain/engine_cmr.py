@@ -176,6 +176,7 @@ def evaluate(model: torch.nn.Module, data_loader: Iterable, device:torch.device,
         mse = mean_squared_error(all_labels, all_preds)
         mae = mean_absolute_error(all_labels, all_preds)
         r2 = r2_score(all_labels, all_preds)
+        r2_list = r2_score(all_labels, all_preds, multioutput='raw_values')
 
     except ValueError:
         print("Input contains NaN.")
@@ -190,14 +191,70 @@ def evaluate(model: torch.nn.Module, data_loader: Iterable, device:torch.device,
 
         mse = mean_squared_error(all_labels, all_preds)
         mae = mean_absolute_error(all_labels, all_preds)
-        r2 = r2_score(all_labels, all_preds, multioutput='raw_values')
+        r2_list = r2_score(all_labels, all_preds, multioutput='raw_values')
         print("r2 for the different outputs:")
-        print(r2)
+        print(r2_list)
         r2 = r2_score(all_labels, all_preds)
 
     total_time = str(datetime.timedelta(seconds=int(time.time() - start_time)))
     print('{} Total time epoch: {}'.format(header, total_time))
-    print('Stats: average loss={}, mse={}, mae={}, r2={}\n'.format(avg_loss, mse, mae, r2))  
+    print('Stats: average loss={}, mse={}, mae={}, r2={}\n'.format(avg_loss, mse, mae, r2))
+
+    # match the generated outputs with the training labels
+    if int(args.num_outputs) == 76:
+
+        r2_labels = ['LV end diastolic volume', 'LV end systolic volume', 'LV stroke volume', 'LV ejection fraction', 'LV cardiac output',
+                    'LV myocardial mass', 'RV end diastolic volume', 'RV end systolic volume', 'RV stroke volume', 'RV ejection fraction',
+                    'LA maximum volume', 'LA minimum volume', 'LA stroke volume', 'LA ejection fraction', 'RA maximum volume',
+                    'RA minimum volume', 'RA stroke volume', 'RA ejection fraction', 'LV mean myocardial wall thickness AHA 1',
+                    'LV mean myocardial wall thickness AHA 2', 'LV mean myocardial wall thickness AHA 3', 'LV mean myocardial wall thickness AHA 4', 'LV mean myocardial wall thickness AHA 5', 'LV mean myocardial wall thickness AHA 6',
+                    'LV mean myocardial wall thickness AHA 7', 'LV mean myocardial wall thickness AHA 8', 'LV mean myocardial wall thickness AHA 9', 'LV mean myocardial wall thickness AHA 10', 'LV mean myocardial wall thickness AHA 11',
+                    'LV mean myocardial wall thickness AHA 12', 'LV mean myocardial wall thickness AHA 13', 'LV mean myocardial wall thickness AHA 14', 'LV mean myocardial wall thickness AHA 15', 'LV mean myocardial wall thickness AHA 16',
+                    'LV mean myocardial wall thickness global', 'LV circumferential strain AHA 1', 'LV circumferential strain AHA 2', 'LV circumferential strain AHA 3', 'LV circumferential strain AHA 4',
+                    'LV circumferential strain AHA 5', 'LV circumferential strain AHA 6', 'LV circumferential strain AHA 7', 'LV circumferential strain AHA 8', 'LV circumferential strain AHA 9',
+                    'LV circumferential strain AHA 10', 'LV circumferential strain AHA 11', 'LV circumferential strain AHA 12', 'LV circumferential strain AHA 13', 'LV circumferential strain AHA 14',
+                    'LV circumferential strain AHA 15', 'LV circumferential strain AHA 16', 'LV circumferential strain global', 'LV radial strain AHA 1', 'LV radial strain AHA 2',
+                    'LV radial strain AHA 3', 'LV radial strain AHA 4', 'LV radial strain AHA 5', 'LV radial strain AHA 6', 'LV radial strain AHA 7',
+                    'LV radial strain AHA 8', 'LV radial strain AHA 9', 'LV radial strain AHA 10', 'LV radial strain AHA 11', 'LV radial strain AHA 12',
+                    'LV radial strain AHA 13', 'LV radial strain AHA 14', 'LV radial strain AHA 15', 'LV radial strain AHA 16', 'LV radial strain global',
+                    'LV longitudinal strain Segment 1', 'LV longitudinal strain Segment 2', 'LV longitudinal strain Segment 3', 'LV longitudinal strain Segment 4', 'LV longitudinal strain Segment 5',
+                    'LV longitudinal strain Segment 6', 'LV longitudinal strain global']
+
+    elif int(args.num_outputs) == 82:
+
+        r2_labels = ['LV end diastolic volume', 'LV end systolic volume', 'LV stroke volume', 'LV ejection fraction', 'LV cardiac output',
+                    'LV myocardial mass', 'RV end diastolic volume', 'RV end systolic volume', 'RV stroke volume', 'RV ejection fraction',
+                    'LA maximum volume', 'LA minimum volume', 'LA stroke volume', 'LA ejection fraction', 'RA maximum volume',
+                    'RA minimum volume', 'RA stroke volume', 'RA ejection fraction', 'Ascending aorta max area', 'Ascending aorta min area',
+                    'Ascending aorta distensibility', 'Descending aorta distensibility', 'Descending aorta minimum area', 'Descending aorta distensibility', 'LV mean myocardial wall thickness AHA 1',
+                    'LV mean myocardial wall thickness AHA 2', 'LV mean myocardial wall thickness AHA 3', 'LV mean myocardial wall thickness AHA 4', 'LV mean myocardial wall thickness AHA 5', 'LV mean myocardial wall thickness AHA 6',
+                    'LV mean myocardial wall thickness AHA 7', 'LV mean myocardial wall thickness AHA 8', 'LV mean myocardial wall thickness AHA 9', 'LV mean myocardial wall thickness AHA 10', 'LV mean myocardial wall thickness AHA 11',
+                    'LV mean myocardial wall thickness AHA 12', 'LV mean myocardial wall thickness AHA 13', 'LV mean myocardial wall thickness AHA 14', 'LV mean myocardial wall thickness AHA 15', 'LV mean myocardial wall thickness AHA 16',
+                    'LV mean myocardial wall thickness global', 'LV circumferential strain AHA 1', 'LV circumferential strain AHA 2', 'LV circumferential strain AHA 3', 'LV circumferential strain AHA 4',
+                    'LV circumferential strain AHA 5', 'LV circumferential strain AHA 6', 'LV circumferential strain AHA 7', 'LV circumferential strain AHA 8', 'LV circumferential strain AHA 9',
+                    'LV circumferential strain AHA 10', 'LV circumferential strain AHA 11', 'LV circumferential strain AHA 12', 'LV circumferential strain AHA 13', 'LV circumferential strain AHA 14',
+                    'LV circumferential strain AHA 15', 'LV circumferential strain AHA 16', 'LV circumferential strain global', 'LV radial strain AHA 1', 'LV radial strain AHA 2',
+                    'LV radial strain AHA 3', 'LV radial strain AHA 4', 'LV radial strain AHA 5', 'LV radial strain AHA 6', 'LV radial strain AHA 7',
+                    'LV radial strain AHA 8', 'LV radial strain AHA 9', 'LV radial strain AHA 10', 'LV radial strain AHA 11', 'LV radial strain AHA 12',
+                    'LV radial strain AHA 13', 'LV radial strain AHA 14', 'LV radial strain AHA 15', 'LV radial strain AHA 16', 'LV radial strain global',
+                    'LV longitudinal strain Segment 1', 'LV longitudinal strain Segment 2', 'LV longitudinal strain Segment 3', 'LV longitudinal strain Segment 4', 'LV longitudinal strain Segment 5',
+                    'LV longitudinal strain Segment 6', 'LV longitudinal strain global']
+
+    elif int(args.num_outputs) == 3:
+        r2_labels = ["LV end diastolic volume",  "LV myocardial mass",  "RV end diastolic volume"]
+
+    elif int(args.num_outputs) == 5:
+        r2_labels = ['LV end diastolic volume', 'LV end systolic volume', 'LV ejection fraction', 'RV end diastolic volume', 'RV end systolic volume']
+
+    elif int(args.num_outputs) == 13:
+        r2_labels = ['LV end diastolic volume', 'LV end systolic volume', 'LV stroke volume', 'LV ejection fraction', 'LV cardiac output', 'LV myocardial mass', 'RV end diastolic volume',
+                   'RV end systolic volume', 'RV stroke volume', 'RV ejection fraction', 'LV mean myocardial wall thickness global', 'LV circumferential strain global',
+                   'LV radial strain global']
+    elif int(args.num_outputs) == 1:
+        r2_labels = ["output"]
+
+    for i in range(len(r2_labels)):
+        print(f'{r2_labels[i]}: {r2_list[i]}')
 
     metrics = {
         'avg_loss': avg_loss,

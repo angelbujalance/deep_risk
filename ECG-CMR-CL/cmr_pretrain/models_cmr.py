@@ -35,8 +35,6 @@ class CMRModel(torch.nn.Module, ABC):
                 print(f"Warning: Invalid num_outputs value '{num_outputs}', using default 1")
                 self.num_outputs = 1
 
-        self.args = args
-
         # Print debug info
         print(f"Initializing CMRModel with latent_dim={self.latent_dim}, num_outputs={self.num_outputs}")
 
@@ -214,6 +212,7 @@ class ResNet503D_MLP(CMRModel):
         self.encoder = nn.Sequential(*model.blocks[:-1])
 
         print("self.latent_dim:", self.latent_dim)
+        print("self.args.temporal_dim:", self.args.temporal_dim)
 
         self.temporal_mlp = nn.Linear(self.args.temporal_dim, 1)
 
