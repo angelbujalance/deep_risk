@@ -5,8 +5,8 @@ from typing import Tuple
 import argparse
 from engine_cl import train_one_epoch, evaluate, get_rank, get_world_size, load_checkpoint, save_checkpoint
 from dataset_cl import CLDataset
-from models_cl import get_model, ClipContrastiveLearning
-from utils.clip_loss import CLIPLoss
+from models_cl import get_model, ClipContrastiveLearning, MultiModalClipContrastiveLearning
+from utils.clip_loss import CLIPLoss, MultiModalCLIPLoss
 
 
 def get_args_parser():
@@ -25,6 +25,7 @@ def get_args_parser():
     parser.add_argument('--num_outputs', default=1)
     parser.add_argument('--pretrained', default=True, help='If the CMR model uses pretrained weight. By default, it uses them.')
     parser.add_argument('--temporal_dim', type=int, default=50)
+    parser.add_argument('--hidden_proj_dim_cmr', type=int, default=768)
 
 
     # ECG model argument
@@ -39,11 +40,14 @@ def get_args_parser():
     parser.add_argument('--drop_path', default=0.1)
     parser.add_argument('--global_pool', default=True, type=bool)
     parser.add_argument('--input_size', default=1, type=int) # number of channels in the ECG
+    parser.add_argument('--hidden_proj_dim_ecg', type=int, default=432)
 
     # Data & path arguments
     parser.add_argument('--cmr_train_path', type=str, help='Path to the train dataset for the CMR data')
+    parser.add_argument('--cmr_systole_train_path', type=str, default=None, help='Path to the train dataset for the CMR data')
     parser.add_argument('--ecg_train_path', type=str, help='Path to the train dataset for the ECG data')
     parser.add_argument('--cmr_val_path', type=str, help='Path to the validation dataset for the CMR data')
+    parser.add_argument('--cmr_systole_val_path', type=str, default=None, help='Path to the val dataset for the CMR data')
     parser.add_argument('--ecg_val_path', type=str, help='Path to the validation dataset for the ECG data')
     parser.add_argument('--output_dir', default=None,
                         help='Path to save model checkpoints and results. If None, the checkpoints and results are not saved.')
@@ -51,6 +55,8 @@ def get_args_parser():
                         help='Path to the saved model checkpoint. If None, training from scratch.')
     parser.add_argument('--checkpoint_path_cmr', default='',
                         help='Path to the pre-trained CMR encoder checkpoint. If None, training from scratch.')
+    parser.add_argument('--checkpoint_path_cmr_systole', default=None,
+                        help='Path to the pre-trained CMR encoder checkpoint when doing MultiModal contrastive learning.')
     parser.add_argument('--checkpoint_path_ecg', default='',
                         help='Path to the pre-trained ECG encoder checkpoint. If None, training from scratch.')
 
@@ -60,6 +66,7 @@ def get_args_parser():
     parser.add_argument('--early_stopping', default=True, type=bool)
     parser.add_argument('--patience', default=15, type=int)
     parser.add_argument('--warmup_epochs', default=40, type=int)
+    parser.add_argument('--min_lr', type=float, default=0.)
 
     # Efficiency arguments
     parser.add_argument('--use_amp', default=True)
@@ -78,6 +85,16 @@ def get_args_parser():
     parser.add_argument('--projection_dim', default=128, type=int)
     parser.add_argument('--encode_temporal_dimension', default=True,
                         help="Rather to apply a transformer encoder to the temporal dimensions or not")
+    
+    # Triple CL Arguments
+    parser.add_argument("--lambda_ecg_cmr1", default=0.33, help="Lambda Value between the ECG and the CMR.")
+    parser.add_argument("--lambda_ecg_cmr2", default=0.33, help="Lambda Value between the ECG and the CMR.")
+    parser.add_argument("--lambda_cmr1_cmr2", default=0.33, help="Lambda Value between the two CMR inputs.")
+
+    # Fine-tune arguments
+    parser.add_argument('--train_labels_path', type=str, help='Path to the train dataset', default=None)
+    parser.add_argument('--val_labels_path', type=str, help='Path to the validation dataset', default=None)
+    parser.add_argument('--test_labels_path', type=str, help='Path to the test dataset', default=None)
 
     # Reproducibility
     parser.add_argument('--seed', default=42)
@@ -110,10 +127,14 @@ def main(args):
 
     # TODO change the dataset for CLDataset, once CLDataset is defined
     dataset_train = CLDataset(cmr_data_path=args.cmr_train_path, ecg_data_path=args.ecg_train_path,
-                 train=True, cmr_transform=cmr_transform_train, ecg_transform=None)
+                              cmr_data_path_systole=args.cmr_systole_train_path, 
+                              labels_path=args.train_labels_path, train=True, 
+                              cmr_transform=cmr_transform_train, ecg_transform=None)
 
     dataset_val = CLDataset(cmr_data_path=args.cmr_val_path, ecg_data_path=args.ecg_val_path,
-                 train=False, cmr_transform=cmr_transform_val, ecg_transform=None)
+                            cmr_data_path_systole=args.cmr_systole_val_path,
+                            labels_path=args.val_labels_path, train=True, 
+                            cmr_transform=cmr_transform_train, ecg_transform=None)
 
     num_tasks = get_world_size()
     global_rank = get_rank()
@@ -153,9 +174,19 @@ def main(args):
     args.len_data_loader = len(data_loader_train.dataset) 
     print("Train dataloader size:", args.len_data_loader)
 
-    model = ClipContrastiveLearning(args.input_size, args.return_latent_space,
+    if args.checkpoint_path_cmr_systole is not None:
+        model = MultiModalClipContrastiveLearning(args.input_size, args.return_latent_space,
                  args.pretrained, args.contrastive_learning,
                  args.latent_dim, args=args)
+        loss_fn = MultiModalCLIPLoss(temperature=args.temperature, lambda_ecg_cmr1=args.lambda_ecg_cmr1, 
+             lambda_ecg_cmr2=args.lambda_ecg_cmr2, lambda_cmr1_cmr2=args.lambda_cmr1_cmr2)
+
+    else:
+        model = ClipContrastiveLearning(args.input_size, args.return_latent_space,
+                 args.pretrained, args.contrastive_learning,
+                 args.latent_dim, args=args)
+        loss_fn = CLIPLoss(temperature=args.temperature, lambda_0=args.lambda_)
+
     # get_model(model_name=args.model_name, args=args)
 
     model.to(device, non_blocking=True)
@@ -175,9 +206,9 @@ def main(args):
     best_loss = float("inf")
     epochs_wo_improvement = 0
 
-    loss_fn = CLIPLoss(temperature=args.temperature, lambda_0=args.lambda_)
+    loss_fn_classification = torch.nn.BCEWithLogitsLoss() # classification
 
-    # load models from checkpoints if path is provided
+    # load CL models from checkpoints if path is provided
     if args.checkpoint_path:
         checkpoint_data = load_checkpoint(model, args.checkpoint_path, device, optimizer)
         if checkpoint_data and 'epoch' in checkpoint_data: # retrieve epoch from checkpoint
@@ -192,10 +223,11 @@ def main(args):
 
         train_metrics = train_one_epoch(clip_cl=model, optimizer=optimizer,
             device=device, device_type=device_type, epoch=epoch, data_loader=data_loader_train,
-            scaler=grad_scaler, loss_fn=loss_fn, args=args)
+            scaler=grad_scaler, loss_fn=loss_fn, loss_fn_classification=loss_fn_classification, args=args)
 
         eval_metrics = evaluate(clip_cl=model, data_loader=data_loader_val, device=device,
-                                device_type=device_type, loss_fn=loss_fn, args=args)
+                                device_type=device_type, loss_fn=loss_fn,
+                                loss_fn_classification=loss_fn_classification, args=args)
 
         # if args.eval_criterion == "loss":
         if eval_metrics['avg_loss'] < best_loss:

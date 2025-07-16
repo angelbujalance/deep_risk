@@ -70,7 +70,7 @@ def get_args_parser():
 
     # Reproducibility
     parser.add_argument('--seed', default=42)
-    parser.add_argument('--seed_list', default=[42, 0, 1])
+    parser.add_argument('--seed_list', default=None)
 
     return parser
 
@@ -89,7 +89,7 @@ def main(args):
     # train augmentations
     transform_train = transforms.Compose([
             # transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
-            transforms.RandomHorizontalFlip(),
+            # transforms.RandomHorizontalFlip(),
             #transforms.ToTensor(),
             transforms.Normalize(mean=[0.5], std=[0.5])]) # grey-scale images
 
@@ -154,9 +154,11 @@ def main(args):
 
     print("args.num_outputs:", args.num_outputs)
     if args.clinical_data:
-        model = ECGwClinicalPredictor(base_encoder=enocder_model, output_dim=int(args.num_outputs)).to(device)
+        model = ECGwClinicalPredictor(base_encoder=enocder_model, output_dim=int(args.num_outputs),
+                                      contrastive_learning=args.contrastive_learning).to(device)
     else:
-        model = ECGPredictor(base_encoder=enocder_model, output_dim=int(args.num_outputs)).to(device)
+        model = ECGPredictor(base_encoder=enocder_model, output_dim=int(args.num_outputs), 
+                             contrastive_learning=args.contrastive_learning).to(device)
 
     print("model:", model)
 
@@ -178,6 +180,7 @@ def main(args):
     epochs_wo_improvement = 0
 
     loss_fn = torch.nn.BCEWithLogitsLoss() # classification
+    #loss_fn = torch.nn.MSELoss() # regression
 
     # retrieve the pre-trained model from a checkpoint
     model_checkpoint = {}
@@ -229,7 +232,7 @@ def main(args):
                 print(f"Saved best model at epoch {epoch} with loss {best_loss:.4f}\n\n")
         else:
             epochs_wo_improvement +=1
-            if epochs_wo_improvement > args.patience and args.early_stopping:
+            if epochs_wo_improvement >= args.patience and args.early_stopping:
                 print(f"Early stopping triggered after {epochs_wo_improvement} epochs without improvement")
                 break
 
@@ -249,7 +252,7 @@ if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
 
-    if args.seed_list:
+    if args.seed_list is not None:
         roc_scores = []
         for seed in args.seed_list:
             args.seed = seed

@@ -70,11 +70,12 @@ class ECGEncoder(timm.models.vision_transformer.VisionTransformer):
 
 
 class ECGPredictor(nn.Module):
-    def __init__(self, base_encoder, output_dim, embed_dim=1000):
+    def __init__(self, base_encoder, output_dim, embed_dim=1000, contrastive_learning=False):
         super().__init__()
         self.encoder = base_encoder
         self.encoder.head = nn.Identity()
         embed_dim = base_encoder.embed_dim
+        self.contrastive_learning = contrastive_learning
 
         self.classifier = nn.Sequential(
             nn.Linear(embed_dim, embed_dim // 2),
@@ -85,8 +86,11 @@ class ECGPredictor(nn.Module):
         )
 
     def forward(self, x):
-        with torch.no_grad():
+        if self.contrastive_learning:
             features = self.encoder(x)
+        else:
+            with torch.no_grad():
+                features = self.encoder(x)
 
         features = self.classifier(features)
         return features
@@ -100,21 +104,38 @@ class ECGwClinicalPredictor(nn.Module):
         embed_dim = base_encoder.embed_dim
         print(f"Embedded dimension of the base encoder = {embed_dim}")
 
-        self.projection = nn.Linear(embed_dim, 192)
+        # self.projection = nn.Linear(embed_dim, 192)
 
         self.classifier = nn.Sequential(
-            nn.Linear(193, 128),
-            nn.GELU(),
-            nn.Linear(128, 32),
-            nn.GELU(),
-            nn.Linear(32, output_dim)
+            nn.Linear(embed_dim + 12, 1024),
+            nn.BatchNorm1d(1024),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+
+            nn.Linear(128, output_dim)  # No activation if regression; add softmax/sigmoid as needed
         )
+
 
     def forward(self, x_ecg, x_clinical):
         with torch.no_grad():
             ecg_features = self.encoder(x_ecg)
 
-        ecg_features = self.projection(ecg_features)
+        # ecg_features = self.projection(ecg_features)
 
         features = torch.cat((ecg_features, x_clinical), dim=1)
 

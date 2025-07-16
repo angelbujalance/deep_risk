@@ -1,12 +1,13 @@
 import torch
 import time
 import math
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, roc_auc_score
 import os
 from collections.abc import Iterable
 from torch.amp import GradScaler
 import datetime
 import numpy as np
+from cmr_pretrain.engine_cmr import evaluate_fine_tune
 
 # Automatic Mixed Precision
 # https://pytorch.org/tutorials/recipes/recipes/amp_recipe.html
@@ -51,8 +52,9 @@ def get_rank():
 
 
 def train_one_epoch(clip_cl: torch.nn.Module, optimizer: torch.optim.Optimizer,
-                    device: torch.device, device_type: str, epoch: int, data_loader: Iterable,
-                    scaler: GradScaler, loss_fn: torch.nn.Module, args=None):
+                    device: torch.device, device_type: str, epoch: int, 
+                    data_loader: Iterable, scaler: GradScaler, loss_fn: torch.nn.Module, 
+                    loss_fn_classification: torch.nn.Module, args=None):
 
     clip_cl.train(True)
 
@@ -75,7 +77,14 @@ def train_one_epoch(clip_cl: torch.nn.Module, optimizer: torch.optim.Optimizer,
         if iter_step % accum_iter == 0:
             adjusted_lr = adjust_learning_rate(optimizer, iter_step / len(data_loader) + epoch, args)
 
-        cmr_inputs, ecg_inputs = data
+        if args.checkpoint_path_cmr_systole is not None:
+            cmr_inputs, ecg_inputs, systole_inputs = data
+            systole_inputs = systole_inputs.to(device, non_blocking=True)
+        elif args.train_labels_path is not None:
+            cmr_inputs, ecg_inputs, labels = data
+            labels = labels.to(device, non_blocking=True) 
+        else:
+            cmr_inputs, ecg_inputs = data
 
         # print(f"Inputs shape is {inputs.shape}")
 
@@ -86,22 +95,31 @@ def train_one_epoch(clip_cl: torch.nn.Module, optimizer: torch.optim.Optimizer,
 
         # amp is used for mixed precision training
         with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=args.use_amp): 
-            # TODO The model should be a model designed for CL, that inputs ecg and cmr and returns the combined loss 
-            # ecg_output = ecg_model(ecg_inputs)
-            # cmr_output = cmr_model(cmr_inputs) # return the latent, then compute loss
-            cmr_features, ecg_features = clip_cl(cmr_inputs, ecg_inputs)
+            # Compute the CL loss
+            if args.checkpoint_path_cmr_systole is not None:
+                cmr_features, ecg_features, sys_features = clip_cl(cmr_inputs, ecg_inputs, systole_inputs)
+            else:
+                cmr_features, ecg_features = clip_cl(cmr_inputs, ecg_inputs)
 
             assert ecg_features.dtype is torch.float16
             assert cmr_features.dtype is torch.float16
 
-            # TODO validate this is the way to do the loss for ECG CMR
-            # loss_ecg = loss_fn(ecg_output, labels)
-            # loss_cmr = loss_fn(cmr_output, labels)
-
-            clip_loss, clip_logits, clip_labels = loss_fn(ecg_features, cmr_features)
+            if args.checkpoint_path_cmr_systole is not None:
+                clip_loss, clip_logits, clip_labels = loss_fn(ecg_features, cmr_features, sys_features)
+            else:
+                clip_loss, clip_logits, clip_labels = loss_fn(ecg_features, cmr_features)
 
             # clip_loss = (1-args.lambda_) * loss_ecg + args.lambda_ * loss_cmr
             assert clip_loss.dtype is torch.float32, f"The dtype of loss is {clip_loss.dtype}"
+
+            if args.train_labels_path is not None:
+                outputs = clip_cl.ecg_predict(ecg_inputs)
+                loss = loss_fn_classification(outputs, labels)
+                print("loss", loss)
+                print("clip_loss", clip_loss)
+                alpha = 0
+
+                clip_loss = alpha * clip_loss + loss
 
             # loss_ecg, loss_cmr = model(cmr_inputs, ecg_inputs)
             # assert loss_ecg.dtype is torch.float16
@@ -162,31 +180,68 @@ def train_one_epoch(clip_cl: torch.nn.Module, optimizer: torch.optim.Optimizer,
     return epoch_loss
 
 
-# TODO change the eval function
 @torch.no_grad()
 def evaluate(clip_cl: torch.nn.Module, data_loader: Iterable, device:torch.device,
-             device_type: str, loss_fn: torch.nn.Module, args=None):
+             device_type: str, loss_fn: torch.nn.Module,
+             loss_fn_classification: torch.nn.Module, args=None):
+
+    # if args.train_label_path is not None:
+    #     evaluate_fine_tune(model=clip_cl, data_loader=data_loader, device=device,
+    #              device_type=device_type, loss_fn=loss_fn, args=args)
+    #     return
 
     header = 'Test:'
 
     clip_cl.eval()
 
-    total_loss = 0
-
     start_time = time.time()
 
+    total_loss = 0
+    all_preds = []
+    all_labels = []
+    all_probs = []
     for data in data_loader:
-
-        cmr_inputs, ecg_inputs = data
+        if args.checkpoint_path_cmr_systole is not None:
+            cmr_inputs, ecg_inputs, systole_inputs = data
+            systole_inputs = systole_inputs.to(device, non_blocking=True) 
+        elif args.val_labels_path is not None:
+            cmr_inputs, ecg_inputs, labels = data
+            labels = labels.to(device, non_blocking=True) 
+        else:
+            cmr_inputs, ecg_inputs = data
 
         cmr_inputs = cmr_inputs.to(device, non_blocking=True)
         ecg_inputs = ecg_inputs.to(device, non_blocking=True)  #, dtype=torch.float32)
 
         with torch.autocast(device_type=device_type, dtype=torch.float16, enabled=args.use_amp):
-            ecg_features, cmr_features = clip_cl(cmr_inputs, ecg_inputs)
+            if args.checkpoint_path_cmr_systole is not None:
+                cmr_features, ecg_features, sys_features = clip_cl(cmr_inputs, ecg_inputs, systole_inputs)
+            else:
+                ecg_features, cmr_features = clip_cl(cmr_inputs, ecg_inputs)
 
-            clip_loss, clip_logits, clip_labels = loss_fn(ecg_features, cmr_features)
+            if args.checkpoint_path_cmr_systole is not None:
+                clip_loss, clip_logits, clip_labels = loss_fn(ecg_features, cmr_features, sys_features)
+            else:
+                clip_loss, clip_logits, clip_labels = loss_fn(ecg_features, cmr_features)
             assert clip_loss.dtype is torch.float32, f"The dtype of loss is {clip_loss.dtype}"
+            
+            if args.val_labels_path is not None:
+                outputs = clip_cl.ecg_predict(ecg_inputs)
+                loss = loss_fn_classification(outputs, labels)
+
+                probs = torch.sigmoid(outputs)
+                all_preds.append(outputs.cpu().numpy())
+                all_labels.append(labels.cpu().numpy())
+                all_probs.append(probs.cpu().numpy())
+
+                print("loss", loss)
+                print("clip_loss", clip_loss)
+                alpha = 0
+
+                clip_loss = alpha * clip_loss + loss
+
+                total_loss += loss
+
             total_loss += clip_loss.item()
 
 
@@ -195,7 +250,19 @@ def evaluate(clip_cl: torch.nn.Module, data_loader: Iterable, device:torch.devic
 
     total_time = str(datetime.timedelta(seconds=int(time.time() - start_time)))
     print('{} Total time epoch: {}'.format(header, total_time))
-    print('Stats: average loss={}'.format(avg_loss))  
+    print('Stats: average loss={}'.format(avg_loss))
+
+    if args.val_labels_path is not None:
+            all_preds = np.concatenate(all_preds, axis=0, dtype=np.float64)
+            all_labels = np.concatenate(all_labels, axis=0, dtype=np.float64)
+            all_probs = np.concatenate(all_probs, axis=0, dtype=np.float64)
+
+            all_preds = np.clip(all_probs, -1e6, 1e6)
+            all_preds = (all_preds > 0).astype(int)
+
+            roc = roc_auc_score(all_labels, all_probs)
+
+            print('Stats: roc score={}\n'.format(roc))
 
     metrics = {
         'avg_loss': avg_loss,
@@ -235,6 +302,9 @@ def save_checkpoint(model, checkpoint_path: str, optimizer=None, epoch=None, los
 
     for filename in os.listdir(checkpoint_path):
         if filename.endswith('.pth') and filename.startswith("Clip"):
+            # eliminate other checkpoint in path
+            os.remove(os.path.join(checkpoint_path, filename))
+        elif filename.endswith('.pth') and filename.startswith("MultiModal"):
             # eliminate other checkpoint in path
             os.remove(os.path.join(checkpoint_path, filename))
 

@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --time=2:00:00
 #SBATCH --array=0-5%6
-#SBATCH --output=output/fine_tune_ecg_clinical/medium2D/%A_%a.out
+#SBATCH --output=output/fine_tune_ecg_clinical/medium2D_MLP_2_0/%A_%a.out
 
 # Activate your environment
 source activate cmr_pretrain

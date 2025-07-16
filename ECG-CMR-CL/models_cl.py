@@ -4,7 +4,7 @@ from torchvision.models import resnet50
 from abc import ABC, abstractmethod
 from lightly.models.modules import SimCLRProjectionHead
 import os
-from ECGEncoder import ECGEncoder, ECGEncoder_dict
+from ECGEncoder import ECGEncoder, ECGEncoder_dict, ECGPredictor
 from collections import OrderedDict
 
 from utils.clip_loss import CLIPLoss
@@ -24,7 +24,7 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
         self.contrastive_learning = bool(contrastive_learning)
         self.latent_dim = latent_dim
         self.args = args
-        self.num_outputs = 0
+        # self.num_outputs = 0
 
         # Print debug info
         print(f"Initializing CMR Model with latent_dim={self.latent_dim}")
@@ -110,6 +110,8 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
         # required to read out the attention map of the last layer
         self.ecg_encoder.blocks[-1].attn.forward = self._attention_forward_wrapper(self.ecg_encoder.blocks[-1].attn)
 
+        print("self.ecg_encoder:", self.ecg_encoder)
+
         print(f"Arguments for the projection heads of the CMR & ECG encoders:")
         print("self.ecg_encoder.embed_dim", self.ecg_encoder.embed_dim) # 768 
         try:
@@ -122,11 +124,18 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
 
         if self.args.model_name in ["ResNet50-3D", 'ResNet50-3D-MLP']:
             self.projection_head_cmr = SimCLRProjectionHead(self.cmr_encoder.latent_dim,
-                                self.cmr_encoder.latent_dim, self.args.projection_dim)
+                                self.args.hidden_proj_dim_cmr, self.args.projection_dim)
 
         # Manually established the embed dimensions to match the ECG encoder output
         self.projection_head_ecg = SimCLRProjectionHead(1000,
-                                                        1000, self.args.projection_dim)
+                                                        self.args.hidden_proj_dim_ecg, self.args.projection_dim)
+
+        if self.args.train_labels_path is not None: 
+            self.projection_head_ecg = SimCLRProjectionHead(576,
+                                                        self.args.hidden_proj_dim_ecg, self.args.projection_dim)
+
+        if args.train_labels_path is not None:
+            self.ecg_predict = ECGPredictor(base_encoder=self.ecg_encoder, output_dim=int(args.num_outputs)).to(device)
 
     def forward(self, x_cmr, x_ecg):
 
@@ -175,3 +184,69 @@ class ClipContrastiveLearning(torch.nn.Module, ABC):
             x = attn_obj.proj_drop(x)
             return x
         return my_forward
+
+
+class MultiModalClipContrastiveLearning(ClipContrastiveLearning):
+    def __init__(self, input_size:int=2, return_latent_space:bool=True,
+                 pretrained:bool=False, contrastive_learning:bool=True,
+                 latent_dim:int=200, device:str='cuda', args=None):
+        super().__init__(input_size, return_latent_space, pretrained, 
+                        contrastive_learning, latent_dim, device, args)
+
+        self.cmr_encoder_diastole = self.cmr_encoder
+        self.args.num_outputs = 5
+
+        # model_name, input_size, latent_dim, num_outputs, args
+        print("Type args", type(args))
+        cmr_model = get_model(model_name=self.args.model_name,
+                                     args=self.args)
+
+        assert self.args.model_name == "ResNet50-3D-MLP"
+        print("Loading ResNet50-3D-MLP...")
+
+        if os.path.exists(self.args.checkpoint_path_cmr):
+            load_checkpoint(cmr_model, self.args.checkpoint_path_cmr_systole, device)
+
+        self.cmr_encoder_systole = cmr_model.encoder
+
+        if hasattr(cmr_model, 'lstm'):
+            self.lstm = cmr_model.lstm
+        elif hasattr(cmr_model, "temporal_mlp"):
+            self.temporal_mlp = cmr_model.temporal_mlp
+            self.cmr_encoder_systole = cmr_model
+            self.cmr_encoder_systole.temporal_mlp = cmr_model.temporal_mlp
+            print("self.cmr_encoder_systole:", self.cmr_encoder_systole)
+
+        # MLP projection layer instead of Average Pooling
+        self.cmr_encoder_systole.temporal_mlp = self.temporal_mlp 
+
+        if self.args.model_name in ["ResNet50-3D", 'ResNet50-3D-MLP']:
+            self.projection_head_diastole = SimCLRProjectionHead(self.cmr_encoder.latent_dim,
+                                self.args.hidden_proj_dim_cmr, self.args.projection_dim)
+            self.projection_head_systole = SimCLRProjectionHead(self.cmr_encoder.latent_dim,
+                                self.args.hidden_proj_dim_cmr, self.args.projection_dim)
+
+
+    def forward(self, x_diast, x_ecg, x_syst):
+        # cmr_features, ecg_features, sys_features
+
+        # https://github.com/oetu/MMCL-ECG-CMR/blob/main/mmcl/models/MultimodalSimCLR.py
+
+        # the encoder returns the latent representations
+
+        # Obtain the CMR features for the diastole and systole volumes
+        diastole_features = self.cmr_encoder_diastole(x_diast)
+        systole_features = self.cmr_encoder_systole(x_syst)
+
+        # Reshape/flatten the CMR features
+        diastole_features = diastole_features.view(diastole_features.size(0), -1)
+        systole_features = systole_features.view(systole_features.size(0), -1)
+
+        diastole_proj = self.projection_head_diastole(diastole_features)
+        systole_proj = self.projection_head_systole(systole_features)
+
+        # print("cmr_proj:", cmr_proj.shape)
+        ecg_features = self.ecg_encoder(x_ecg)
+        ecg_proj = self.projection_head_ecg(ecg_features)
+
+        return diastole_proj, systole_proj, ecg_proj
