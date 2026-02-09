@@ -1,7 +1,7 @@
 ## Dual-Phase Cross-Modal Contrastive Learning for CMR-Guided ECG Representations for Cardiovascular Disease Assessment
 
 <p align="center">
-  <img src="https://user-images.githubusercontent.com/11435359/146857310-f258c86c-fde6-48e8-9cee-badd2b21bd2c.png" width="480">
+  <img src="https://github.com/angelbujalance/deep_risk/blob/main/Method-clip.pdf" width="480">
 </p>
 
 This is repository of the paper [Dual-Phase Cross-Modal Contrastive Learning for CMR-Guided ECG Representations for Cardiovascular Disease Assessment](https://spie.org/medical-imaging/presentation/Dual-phase-cross-modal-contrastive-learning-for-CMR-guided-ECG/13925-23). If you use this code, please cite:
